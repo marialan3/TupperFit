@@ -190,10 +190,14 @@ function donut(p, c, f) {
   if (tot) k.forEach(([v, col]) => { const len = C * v / tot; segs += `<circle cx="40" cy="40" r="${R0}" fill="none" stroke="${col}" stroke-width="12" stroke-dasharray="${len} ${C - len}" stroke-dashoffset="${-off}" transform="rotate(-90 40 40)"/>`; off += len; });
   return `<svg viewBox="0 0 80 80" width="92" height="92" style="flex:none">${segs}<text x="40" y="38" text-anchor="middle" font-size="13" font-weight="700" fill="var(--text)">${r0(tot)}</text><text x="40" y="50" text-anchor="middle" font-size="8" fill="var(--muted)">kcal</text></svg>`;
 }
+function statusTag(tot, t) {
+  const off = tot.kcal - t.kcal;
+  return !tot.kcal ? '' : Math.abs(off) <= t.kcal * 0.05 ? '<span class="tag">✅ en objetivo</span>' : off > 0 ? `<span class="tag bad">⚠️ te pasas ${r0(off)} kcal</span>` : `<span class="tag warn">faltan ${r0(-off)} kcal</span>`;
+}
 // Resumen de un día con gráfico circular: ¿cubro mis macros y no me paso?
 function daySummary(tot, t) {
   const off = tot.kcal - t.kcal, kc = tot.p * 4 + tot.c * 4 + tot.f * 9 || 1, pr = db.profile;
-  const st = !tot.kcal ? '' : Math.abs(off) <= t.kcal * 0.05 ? '<span class="tag">✅ en objetivo</span>' : off > 0 ? `<span class="tag bad">⚠️ te pasas ${r0(off)} kcal</span>` : `<span class="tag warn">faltan ${r0(-off)} kcal</span>`;
+  const st = statusTag(tot, t);
   const warn = [];
   if (tot.kcal && tot.p < t.p * 0.9) warn.push(`faltan ${r0(t.p - tot.p)} g de proteína`);
   if (tot.f > t.f * 1.1) warn.push(`${r0(tot.f - t.f)} g de grasa de más`);
@@ -231,7 +235,7 @@ async function doBackup(share) {
 }
 
 // ───────── estado de la interfaz ─────────
-const S = { tab: 'hoy', date: todayS(), planWeek: mondayOf(todayS()), weekStart: mondayOf(todayS()), q: '', filter: 'all', wRange: 'all' };
+const S = { tab: 'hoy', date: todayS(), planWeek: mondayOf(todayS()), weekStart: mondayOf(todayS()), q: '', filter: 'all', wRange: 'all', pOpen: {} };
 let M = null; // estado de la ventana "añadir"
 let R = null; // estado del editor de platos con ingredientes
 let C = null; // estado del catálogo de nococinomas
@@ -322,19 +326,23 @@ function viewAlimentos() {
 function viewPlan() {
   const mon = S.planWeek, t = targets(), today = todayS();
   let h = `<div class="daynav"><button data-act="pweek" data-n="-1">‹</button><div class="t" data-act="cal" data-for="plan">📅 Semana del ${fmtDate(mon, { day: 'numeric', month: 'short' })}</div><button data-act="pweek" data-n="1">›</button></div>
-    <div class="row wrap" style="margin-bottom:10px"><button class="btn sm sec" data-act="plan-copy-prev">📋 Copiar plan de la semana anterior</button><button class="btn sm sec" data-act="plan-from-log">⏪ Usar lo que comí la semana anterior</button></div>`;
+    <div class="row wrap" style="margin-bottom:10px"><button class="btn sm sec" data-act="plan-copy-prev">📋 Copiar plan de la semana anterior</button><button class="btn sm sec" data-act="plan-from-log">⏪ Usar lo que comí la semana anterior</button></div>
+    <div class="row wrap" style="margin-bottom:10px"><button class="btn sm ghost" data-act="pall" data-k="open">Desplegar todos</button><button class="btn sm ghost" data-act="pall" data-k="close">Plegar todos</button></div>`;
   const orders = {};
   for (let i = 0; i < 7; i++) {
     const date = addDays(mon, i), es = getPlan(date), tot = totals(es);
-    
-    h += `<div class="card pday ${date === today ? 'today' : ''}"><h3><span style="text-transform:capitalize">${fmtDate(date, { weekday: 'long', day: 'numeric' })}</span></h3>`;
-    h += es.length ? `<div style="margin-bottom:6px">${daySummary(tot, t)}</div>` : '<div class="empty">Sin planificar</div>';
-    MEALS.forEach(([key, name, ic]) => es.filter(e => e.meal === key).forEach(e => {
-      const m = eM(e);
-      if (db.foods.find(f => f.id === e.foodId)?.type === 'tupper') orders[e.name] = (orders[e.name] || 0) + e.qty;
-      h += `<div class="entry" data-act="edit-entry" data-id="${e.id}" data-where="plan" data-date="${date}"><span>${ic}</span><div class="grow"><div class="n">${esc(e.name)}</div><div class="s">${qtyLabel(e)} · P ${r0(m.p)}</div></div><span class="k">${r0(m.kcal)}</span><button class="icon" data-act="del-entry" data-id="${e.id}" data-where="plan" data-date="${date}">🗑️</button></div>`;
-    }));
-    h += `<div class="row wrap mt"><button class="btn sm sec" data-act="add" data-target="plan" data-date="${date}" data-meal="almuerzo">＋ Añadir</button>${es.length ? `<button class="btn sm ghost" data-act="plan-dup" data-date="${date}">Duplicar al día siguiente</button>` : ''}</div></div>`;
+    const open = S.pOpen[date] ?? es.length === 0; // los días con comidas se pliegan solos
+    es.forEach(e => { if (db.foods.find(f => f.id === e.foodId)?.type === 'tupper') orders[e.name] = (orders[e.name] || 0) + e.qty; });
+    h += `<div class="card pday ${date === today ? 'today' : ''}"><h3 data-act="pday" data-date="${date}" style="cursor:pointer"><span style="text-transform:capitalize">${open ? '▾' : '▸'} ${fmtDate(date, { weekday: 'long', day: 'numeric' })}</span>${!open && es.length ? `<span style="font-weight:400;font-size:.85rem">${statusTag(tot, t)} <b>${r0(tot.kcal)}</b> kcal · P ${r0(tot.p)} g</span>` : ''}</h3>`;
+    if (open) {
+      h += es.length ? `<div style="margin-bottom:6px">${daySummary(tot, t)}</div>` : '<div class="empty">Sin planificar</div>';
+      MEALS.forEach(([key, name, ic]) => es.filter(e => e.meal === key).forEach(e => {
+        const m = eM(e);
+        h += `<div class="entry" data-act="edit-entry" data-id="${e.id}" data-where="plan" data-date="${date}"><span>${ic}</span><div class="grow"><div class="n">${esc(e.name)}</div><div class="s">${qtyLabel(e)} · P ${r0(m.p)}</div></div><span class="k">${r0(m.kcal)}</span><button class="icon" data-act="del-entry" data-id="${e.id}" data-where="plan" data-date="${date}">🗑️</button></div>`;
+      }));
+      h += `<div class="row wrap mt"><button class="btn sm sec" data-act="add" data-target="plan" data-date="${date}" data-meal="almuerzo">＋ Añadir</button>${es.length ? `<button class="btn sm ghost" data-act="plan-dup" data-date="${date}">Duplicar al día siguiente</button>` : ''}</div>`;
+    }
+    h += '</div>';
   }
   const names = Object.keys(orders);
   h += `<div class="card"><h3>🛒 Pedido de tuppers de la semana</h3>${names.length ? names.sort().map(n => `<div class="row between entry"><span>${esc(n)}</span><b>× ${r1(orders[n])}</b></div>`).join('') + `<p class="muted">Total: ${r0(sum(Object.values(orders)))} tuppers</p>` : '<p class="empty">Planifica tuppers (alimentos de tipo "Tupper") y aquí verás cuántos pedir.</p>'}</div>`;
@@ -498,7 +506,7 @@ function updDay(m) {
 
 function pushEntry(f, qty, meal) {
   const e = { id: uid(), meal, name: f.name, qty, unit: f.unit, base: { kcal: f.kcal, p: f.p, c: f.c, f: f.f }, foodId: f.id };
-  if (M.target === 'plan') getPlan(M.date, true).push(e); else getDay(M.date, true).entries.push(e);
+  if (M.target === 'plan') { getPlan(M.date, true).push(e); S.pOpen[M.date] = true; } else getDay(M.date, true).entries.push(e);
 }
 
 // ───────── editor de platos con ingredientes ─────────
@@ -633,6 +641,8 @@ const A = {
     save(); closeModal(); render(); toast('Ejercicio guardado ✔');
   },
   'del-work': el => { const d = getDay(S.date, true); d.workouts = workouts(d).filter(k => k.id !== el.dataset.id); save(); render(); },
+  pday: el => { const d = el.dataset.date, es = getPlan(d); S.pOpen[d] = !(S.pOpen[d] ?? es.length === 0); render(); },
+  pall: el => { for (let i = 0; i < 7; i++) S.pOpen[addDays(S.planWeek, i)] = el.dataset.k === 'open'; render(); },
   tab: el => { S.tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
   day: el => { S.date = addDays(S.date, +el.dataset.n); render(); },
   today: () => { S.date = todayS(); render(); },
