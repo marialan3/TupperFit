@@ -48,10 +48,10 @@ function load() {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const d = JSON.parse(raw);
-      return { profile: { ...DEF_PROFILE, ...(d.profile || {}) }, foods: d.foods || [], log: d.log || {}, plan: d.plan || {} };
+      return { profile: { ...DEF_PROFILE, ...(d.profile || {}) }, foods: d.foods || [], log: d.log || {}, plan: d.plan || {}, lastBackup: d.lastBackup || null, created: d.created || todayS() };
     }
   } catch (e) { console.warn('No se pudo leer', e); }
-  return { profile: { ...DEF_PROFILE }, foods: BASE_FOODS.map(f => ({ ...f })), log: {}, plan: {} };
+  return { profile: { ...DEF_PROFILE }, foods: BASE_FOODS.map(f => ({ ...f })), log: {}, plan: {}, lastBackup: null, created: todayS() };
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(db)); }
@@ -173,6 +173,24 @@ const macroRow = (label, color, v, t) => {
   return `<div class="macro"><div class="h"><span><span class="dot" style="background:${color}"></span>${label}</span><span><b>${r0(v)}</b> / ${r0(t)} g</span></div><div class="bar"><i style="width:${Math.min(100, pct)}%;background:${pct > 110 ? 'var(--bad)' : color}"></i></div></div>`;
 };
 
+// ───────── protección y copias de seguridad ─────────
+const P = { persisted: null };
+async function askPersist() {
+  try { if (navigator.storage?.persist) P.persisted = (await navigator.storage.persisted()) || (await navigator.storage.persist()); } catch (e) { /* sin soporte */ }
+  if (S.tab === 'ajustes' && !document.activeElement?.closest?.('input,select,textarea')) render();
+}
+const backupDays = () => Math.floor((parseD(todayS()) - parseD(db.lastBackup || db.created)) / 864e5);
+const needsBackup = () => Object.values(db.log).some(d => d.entries.length) && backupDays() >= 7;
+async function doBackup(share) {
+  const name = `tupperfit-${todayS()}.json`, json = JSON.stringify(db, null, 1);
+  const download = () => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); };
+  try {
+    const file = new File([json], name, { type: 'application/json' });
+    if (share && navigator.canShare?.({ files: [file] })) await navigator.share({ files: [file], title: 'Copia de TupperFit' }); else download();
+  } catch (e) { if (e.name === 'AbortError') return; download(); }
+  db.lastBackup = todayS(); save(); render(); toast('Copia guardada ✔');
+}
+
 // ───────── estado de la interfaz ─────────
 const S = { tab: 'hoy', date: todayS(), planWeek: mondayOf(todayS()), weekStart: mondayOf(todayS()), q: '', filter: 'all' };
 let M = null; // estado de la ventana "añadir"
@@ -204,6 +222,7 @@ function viewHoy() {
   if (!isToday) h += `<div class="center" style="margin:-4px 0 10px"><button class="btn sm sec" data-act="today">Ir a hoy</button></div>`;
   if (!db.profile.configured) h += `<div class="card"><b>👋 ¡Bienvenida!</b><p class="muted">Empieza configurando tu perfil para calcular tus calorías y macros objetivo.</p><button class="btn" data-act="tab" data-tab="ajustes">Configurar perfil</button></div>`;
 
+  if (needsBackup()) h += `<div class="card" style="border-color:var(--warn)"><b>💾 Haz una copia de seguridad</b><p class="muted">${db.lastBackup ? `Hace ${backupDays()} días de tu última copia.` : `Aún no has hecho ninguna copia y llevas ${backupDays()} días de datos.`} Si se borran los datos del navegador, se perderían.</p><button class="btn" data-act="backup-share">Guardar copia ahora</button></div>`;
   h += `<div class="card"><div class="row" style="gap:14px">${ring(tot.kcal / t.kcal, over ? 'var(--bad)' : 'var(--kcal)', r0(Math.abs(rem)), over ? 'kcal de más' : 'kcal restantes')}
     <div class="grow"><div class="muted">Comido</div><b style="font-size:1.3rem">${r0(tot.kcal)}</b> <span class="muted">/ ${r0(t.kcal)} kcal</span>
     <div class="muted mt">Reparto actual</div><div style="font-size:.85rem">P ${r0(tot.p * 4 / kc * 100)}% · C ${r0(tot.c * 4 / kc * 100)}% · G ${r0(tot.f * 9 / kc * 100)}%</div>
@@ -355,8 +374,10 @@ function viewAjustes() {
     <div class="preview muted">📐 Así se calcula: ${p.pP}% de ${r0(p.kcal)} kcal = ${r0(p.kcal * p.pP / 100)} kcal ÷ 4 kcal/g = <b>${r0(t.p)} g de proteína</b>. Hidratos igual (÷ 4) y grasas ÷ 9.<br>Proteína por kg: ${r0(t.p)} g ÷ ${r1(wt)} kg (tu último peso) = <b>${r1(t.p / wt)} g/kg</b> ${t.p / wt < 1.2 ? '<span class="warnc">· bajo para un déficit: sube el % de proteínas</span>' : ''}</div>
     <p class="muted">Las calorías se calculan con 4 kcal/g de proteínas e hidratos y 9 kcal/g de grasas. Con déficit se suele recomendar 1,6–2,2 g de proteína por kg.</p></div>
 
-  <div class="card"><h2>💾 Copia de seguridad</h2><p class="muted">Tus datos viven solo en este dispositivo. Para pasarlos al móvil (o guardarlos), exporta un archivo e impórtalo en el otro dispositivo.</p>
-    <div class="row wrap"><button class="btn" data-act="export">⬇️ Exportar datos</button><button class="btn sec" data-act="import-file">⬆️ Importar datos</button></div>
+  <div class="card"><h2>💾 Copia de seguridad</h2><p class="muted">Tus datos viven solo en este dispositivo. Guarda copias para no perderlos y para pasarlos de un dispositivo a otro.</p>
+    <div class="preview">Última copia: <b>${db.lastBackup ? `${fmtDate(db.lastBackup, { day: 'numeric', month: 'long' })} (hace ${backupDays()} días)` : 'ninguna todavía'}</b><br>Protección del navegador: ${P.persisted ? '🔒 <b>activa</b> (no los borrará solo si falta espacio)' : '⚠️ no garantizada: el navegador podría borrar los datos si le falta espacio. Instala la app en la pantalla de inicio y haz copias.'}</div>
+    <div class="row wrap"><button class="btn" data-act="backup-share">💾 Guardar copia (compartir)</button><button class="btn sec" data-act="export">⬇️ Descargar archivo</button><button class="btn sec" data-act="import-file">⬆️ Importar datos</button></div>
+    <p class="muted">"Guardar copia" abre el menú de compartir del móvil: elígete Drive, WhatsApp o el correo. Recomendado: una vez por semana.</p>
     <input type="file" id="file" accept=".json,application/json" hidden>
     <button class="btn danger sm mt" data-act="reset">Borrar todos los datos</button></div>
   <p class="muted center">TupperFit · v1.0 · Las estimaciones no sustituyen el consejo de un profesional sanitario.</p>`;
@@ -563,10 +584,8 @@ const A = {
     save(); closeModal(); render(); toast(n ? `${n} alimentos importados ✔` : 'No se reconoció ninguna línea');
   },
   'use-sug': () => { db.profile.kcal = Math.round(tdee() - db.profile.goalKgWeek * 1100); db.profile.configured = true; save(); render(); },
-  export: () => {
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(db, null, 1)], { type: 'application/json' }));
-    a.download = `tupperfit-${todayS()}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-  },
+  export: () => doBackup(false),
+  'backup-share': () => doBackup(true),
   'import-file': () => $('#file').click(),
   reset: () => { if (confirm('¿Borrar TODOS tus datos? No se puede deshacer.') && confirm('Seguro del todo. ¿Borrar?')) { localStorage.removeItem(KEY); db = load(); render(); toast('Datos borrados'); } },
 };
@@ -610,4 +629,5 @@ document.addEventListener('change', ev => {
 });
 
 render();
+askPersist();
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
