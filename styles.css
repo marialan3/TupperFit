@@ -119,3 +119,15 @@ textarea { min-height: 110px; }
 .seg { display: flex; background: var(--bg); border-radius: 12px; padding: 3px; margin-bottom: 10px; }
 .seg button { flex: 1; border: 0; background: none; padding: 7px; border-radius: 10px; color: var(--muted); cursor: pointer; }
 .seg button.on { background: var(--card); color: var(--text); font-weight: 700; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+
+/* calendario */
+.daynav .t { cursor: pointer; }
+.cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal .wd { text-align: center; font-size: .72rem; color: var(--muted); padding: 2px 0; }
+.cal button { position: relative; aspect-ratio: 1; border: 0; border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; font-size: .95rem; cursor: pointer; }
+.cal button.today { outline: 2px solid var(--brand); }
+.cal button.sel { background: var(--brand); color: #fff; font-weight: 700; }
+.cal button.has::after { content: ''; position: absolute; bottom: 4px; left: 50%; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--brand); }
+.cal button.sel.has::after { background: #fff; }
+.cal i { visibility: hidden; }
+:root { --ex: #8b5cf6; }

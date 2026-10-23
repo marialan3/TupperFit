@@ -40,6 +40,9 @@ const BASE_FOODS = [
   ['Proteína whey (polvo)', 400, 80, 8, 6], ['Café con leche (taza ~200 ml semi)', 47, 3.3, 4.8, 1.6],
 ].map((a, i) => ({ id: 'base' + i, name: a[0], type: 'base', unit: '100g', kcal: a[1], p: a[2], c: a[3], f: a[4], fav: false, used: 0 }));
 
+const SPORTS = { caminar: ['🚶 Caminar', 3.5], correr: ['🏃 Correr', 9], bici: ['🚴 Bici', 7], natacion: ['🏊 Natación', 6], fuerza: ['🏋️ Fuerza / gimnasio', 4], eliptica: ['🌀 Elíptica', 5], yoga: ['🧘 Yoga / pilates', 2.5], baile: ['💃 Baile / zumba', 5], hiit: ['🔥 HIIT', 8], otro: ['⚡ Otro', 4] };
+const WEEK_MIN_GOAL = 150; // recomendación general de actividad semanal (OMS)
+
 const DEF_PROFILE = { configured: false, sex: 'f', age: 35, height: 165, weight: 75, goalWeight: 0, activity: 1.375, goalKgWeek: 0.5, kcal: 1700, pP: 35, pC: 40, pF: 25, stepsGoal: 10000 };
 
 let db = load();
@@ -59,9 +62,10 @@ function save() {
 }
 
 const getDay = (date, create) => {
-  if (!db.log[date] && create) db.log[date] = { entries: [], weight: null, steps: null, burned: null, water: null, note: '' };
-  return db.log[date] || { entries: [], weight: null, steps: null, burned: null, water: null, note: '' };
+  if (!db.log[date] && create) db.log[date] = { entries: [], weight: null, steps: null, burned: null, water: null, note: '', workouts: [] };
+  return db.log[date] || { entries: [], weight: null, steps: null, burned: null, water: null, note: '', workouts: [] };
 };
+const workouts = d => d.workouts || [];
 const getPlan = (date, create) => { if (!db.plan[date] && create) db.plan[date] = []; return db.plan[date] || []; };
 
 // ───────── cálculos ─────────
@@ -106,8 +110,10 @@ function weekStats(mon) {
     days, L, n: L.length, kcal, p, c, f, pctP: p * 4 / kc * 100, pctC: c * 4 / kc * 100, pctF: f * 9 / kc * 100,
     deficit: avg(L.map(x => x.def)), totalDef: sum(L.map(x => x.def)),
     inRange: L.filter(x => Math.abs(x.t.kcal - tg.kcal) <= tg.kcal * 0.05).length,
-    wAvg: ws.length ? avg(ws) : null, wFirst: ws[0] ?? null, wLast: ws.length ? ws[ws.length - 1] : null, wN: ws.length,
+    wAvg: ws.length ? avg(ws) : null, wFirst: ws[0] ?? null, wLast: ws.length ? ws[ws.length - 1] : null, wCount: ws.length,
     steps: st.length ? avg(st) : null, burned: avg(days.filter(x => x.d.burned).map(x => x.d.burned)),
+    wMin: sum(days.map(x => sum(workouts(x.d).map(k => k.min)))), wKcal: sum(days.map(x => sum(workouts(x.d).map(k => k.kcal)))), wN: sum(days.map(x => workouts(x.d).length)),
+    byType: days.reduce((o, x) => { workouts(x.d).forEach(k => { o[k.type] = o[k.type] || { min: 0, n: 0 }; o[k.type].min += k.min; o[k.type].n++; }); return o; }, {}),
   };
 }
 
@@ -140,6 +146,39 @@ function lineChart(items, { color = 'var(--p)', unit = '' } = {}) {
   pts.forEach(p => { s += `<circle cx="${x(p.i)}" cy="${y(p.v)}" r="3.5" fill="${color}"/><text x="${x(p.i)}" y="${y(p.v) - 7}" class="val">${r1(p.v)}${unit}</text>`; });
   items.forEach((it, i) => { s += `<text x="${x(i)}" y="${H - 8}" class="ax" text-anchor="middle">${esc(it.l)}</text>`; });
   return s + '</svg>';
+}
+function weightChart(pts, goal) {
+  const W = 340, H = 200, pl = 36, pr = 12, pt = 16, pb = 26, DAY = 864e5;
+  const t0 = parseD(pts[0].d).getTime(), t1 = parseD(pts[pts.length - 1].d).getTime(), span = Math.max(t1 - t0, DAY);
+  const x = d => pl + (W - pl - pr) * (pts.length === 1 ? 0.5 : (parseD(d).getTime() - t0) / span);
+  const trend = pts.map(p => { const w = pts.filter(q => q.d <= p.d && parseD(p.d) - parseD(q.d) <= 6 * DAY); return { d: p.d, v: avg(w.map(q => q.v)) }; });
+  let lo = Math.min(...pts.map(p => p.v)), hi = Math.max(...pts.map(p => p.v));
+  const showGoal = goal > 0 && goal >= lo - Math.max(hi - lo, 2) * 1.5; if (showGoal) lo = Math.min(lo, goal);
+  if (hi - lo < 1) { lo -= 0.5; hi += 0.5; } const pad2 = (hi - lo) * 0.12; lo -= pad2; hi += pad2;
+  const y = v => pt + (H - pt - pb) * (1 - (v - lo) / (hi - lo));
+  let s = `<svg viewBox="0 0 ${W} ${H}" class="chart" role="img">`;
+  for (let i = 0; i <= 4; i++) { const v = lo + (hi - lo) * i / 4; s += `<line x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${pl - 4}" y="${y(v) + 3}" class="ax" text-anchor="end">${r0(v)}</text>`; }
+  if (showGoal) s += `<line x1="${pl}" x2="${W - pr}" y1="${y(goal)}" y2="${y(goal)}" class="tgt"/><text x="${W - pr}" y="${y(goal) - 3}" class="ax" text-anchor="end">objetivo ${r1(goal)}</text>`;
+  if (pts.length > 1) { s += `<polyline fill="none" stroke="var(--p)" stroke-width="1" opacity=".35" points="${pts.map(p => `${x(p.d)},${y(p.v)}`).join(' ')}"/><polyline fill="none" stroke="var(--brand)" stroke-width="2.6" stroke-linejoin="round" points="${trend.map(p => `${x(p.d)},${y(p.v)}`).join(' ')}"/>`; }
+  pts.forEach((p, i) => { s += `<circle cx="${x(p.d)}" cy="${y(p.v)}" r="${pts.length > 40 ? 1.8 : 3}" fill="var(--p)"/>`; if (pts.length <= 10 || i === pts.length - 1) s += `<text x="${x(p.d)}" y="${y(p.v) - 7}" class="val">${r1(p.v)}</text>`; });
+  [pts[0].d, pts.length > 2 ? pts[Math.floor((pts.length - 1) / 2)].d : null, pts[pts.length - 1].d].forEach((d, i) => { if (d && (i !== 2 || pts.length > 1)) s += `<text x="${x(d)}" y="${H - 8}" class="ax" text-anchor="${i === 0 && pts.length > 1 ? 'start' : i === 2 ? 'end' : 'middle'}">${fmtDate(d, { day: 'numeric', month: 'short' })}</text>`; });
+  return s + '</svg>';
+}
+function progressCard() {
+  const all = Object.keys(db.log).filter(k => db.log[k].weight).sort().map(k => ({ d: k, v: db.log[k].weight }));
+  let h = '<div class="card"><h2>📉 Progreso de peso</h2>';
+  if (!all.length) return h + '<p class="empty">Anota tu peso en "Hoy" (a diario o cuando te peses) y aquí verás cómo evoluciona desde que empezó el plan.</p></div>';
+  const first = all[0], last = all[all.length - 1], goal = db.profile.goalWeight, today = todayS();
+  let pts = S.wRange === 'all' ? all : all.filter(p => p.d >= addDays(today, -S.wRange)); if (!pts.length) pts = all.slice(-1);
+  const lost = first.v - last.v, weeks = (parseD(last.d) - parseD(first.d)) / 6048e5, rate = weeks >= 1 ? lost / weeks : null, left = goal > 0 ? last.v - goal : null;
+  h += `<div class="chips">${[['all', 'Todo'], ['90', '3 meses'], ['30', '1 mes']].map(([k, l]) => `<button class="chip ${S.wRange === k ? 'on' : ''}" data-act="wrange" data-k="${k}">${l}</button>`).join('')}</div>${weightChart(pts, goal)}
+    <p class="muted">Línea verde = tendencia (media de 7 días, más fiable que el peso de un día); puntos azules = cada pesada.</p>
+    <div class="grid3"><div class="stat"><b>${r1(first.v)}</b><span>inicio (${fmtDate(first.d, { day: 'numeric', month: 'short' })})</span></div><div class="stat"><b>${r1(last.v)}</b><span>actual</span></div>
+    <div class="stat"><b class="${lost >= 0 ? 'good' : 'badc'}">${lost >= 0 ? '−' : '+'}${r1(Math.abs(lost))} kg</b><span>${lost >= 0 ? 'perdidos' : 'ganados'} (${r1(Math.abs(lost) / first.v * 100)}%)</span></div></div>
+    <div class="grid3 mt"><div class="stat"><b>${rate != null ? r1(rate) + ' kg' : '—'}</b><span>ritmo medio por semana</span></div><div class="stat"><b>${left != null ? (left > 0 ? r1(left) + ' kg' : '¡Meta!') : '—'}</b><span>para tu objetivo${goal > 0 ? ` (${r1(goal)})` : ''}</span></div><div class="stat"><b>${all.length}</b><span>pesadas registradas</span></div></div>`;
+  if (left > 0 && rate > 0.1) h += `<p class="muted">A este ritmo llegarías a tu objetivo hacia <b>${fmtDate(addDays(today, Math.round(left / rate * 7)), { month: 'long', year: 'numeric' })}</b>.</p>`;
+  else if (!(goal > 0)) h += '<p class="muted">Pon tu peso objetivo en Ajustes para ver cuánto te falta.</p>';
+  return h + '</div>';
 }
 function ring(pct, color, big, small) {
   const R = 62, C = 2 * Math.PI * R, v = Math.max(0, Math.min(1, pct));
@@ -192,7 +231,7 @@ async function doBackup(share) {
 }
 
 // ───────── estado de la interfaz ─────────
-const S = { tab: 'hoy', date: todayS(), planWeek: mondayOf(todayS()), weekStart: mondayOf(todayS()), q: '', filter: 'all' };
+const S = { tab: 'hoy', date: todayS(), planWeek: mondayOf(todayS()), weekStart: mondayOf(todayS()), q: '', filter: 'all', wRange: 'all' };
 let M = null; // estado de la ventana "añadir"
 let R = null; // estado del editor de platos con ingredientes
 let C = null; // estado del catálogo de nococinomas
@@ -219,7 +258,7 @@ function viewHoy() {
   const exp = expenditure(date), def = exp - tot.kcal;
   const plan = getPlan(date).filter(e => !e.done);
   const isToday = date === todayS();
-  let h = `<div class="daynav"><button data-act="day" data-n="-1">‹</button><div class="t">${isToday ? 'Hoy · ' : ''}${fmtDate(date)}</div><button data-act="day" data-n="1">›</button></div>`;
+  let h = `<div class="daynav"><button data-act="day" data-n="-1">‹</button><div class="t" data-act="cal" data-for="hoy">📅 ${isToday ? 'Hoy · ' : ''}${fmtDate(date)}</div><button data-act="day" data-n="1">›</button></div>`;
   if (!isToday) h += `<div class="center" style="margin:-4px 0 10px"><button class="btn sm sec" data-act="today">Ir a hoy</button></div>`;
   if (!db.profile.configured) h += `<div class="card"><b>👋 ¡Bienvenida!</b><p class="muted">Empieza configurando tu perfil para calcular tus calorías y macros objetivo.</p><button class="btn" data-act="tab" data-tab="ajustes">Configurar perfil</button></div>`;
 
@@ -250,7 +289,9 @@ function viewHoy() {
   });
   if (!day.entries.some(e => e.meal === 'otros')) h += `<button class="btn sm ghost" data-act="add" data-target="log" data-meal="otros">＋ Añadir otro (picoteo, bebida…)</button>`;
 
-  h += `<div class="card mt"><h3>🏃 Cuerpo y actividad</h3><div class="grid2">
+  const wk = workouts(day);
+  h += `<div class="card mt"><h3><span>💪 Ejercicio</span><span class="muted">${wk.length ? `${sum(wk.map(k => k.min))} min · ${r0(sum(wk.map(k => k.kcal)))} kcal` : ''}</span></h3>${wk.length ? '' : '<div class="empty">Sin ejercicio registrado</div>'}${wk.map(k => `<div class="entry"><div class="grow"><div class="n">${SPORTS[k.type][0]}</div><div class="s">${k.min} min</div></div><span class="k">${r0(k.kcal)}${k.est ? '~' : ''}</span><button class="icon" data-act="del-work" data-id="${k.id}">🗑️</button></div>`).join('')}<button class="btn sm sec mt" data-act="add-work">＋ Añadir ejercicio</button></div>`;
+  h += `<div class="card"><h3>🏃 Cuerpo y actividad</h3><div class="grid2">
     <div class="field"><label>Peso (kg)</label><input type="number" inputmode="decimal" step="0.1" data-day="weight" value="${day.weight ?? ''}" placeholder="${latestWeight(date)}"></div>
     <div class="field"><label>Pasos</label><input type="number" inputmode="numeric" data-day="steps" value="${day.steps ?? ''}" placeholder="${db.profile.stepsGoal}"></div>
     <div class="field"><label>Calorías activas (Amazfit)</label><input type="number" inputmode="numeric" data-day="burned" value="${day.burned ?? ''}" placeholder="p. ej. 350"></div>
@@ -280,7 +321,7 @@ function viewAlimentos() {
 
 function viewPlan() {
   const mon = S.planWeek, t = targets(), today = todayS();
-  let h = `<div class="daynav"><button data-act="pweek" data-n="-1">‹</button><div class="t">Semana del ${fmtDate(mon, { day: 'numeric', month: 'short' })}</div><button data-act="pweek" data-n="1">›</button></div>
+  let h = `<div class="daynav"><button data-act="pweek" data-n="-1">‹</button><div class="t" data-act="cal" data-for="plan">📅 Semana del ${fmtDate(mon, { day: 'numeric', month: 'short' })}</div><button data-act="pweek" data-n="1">›</button></div>
     <div class="row wrap" style="margin-bottom:10px"><button class="btn sm sec" data-act="plan-copy-prev">📋 Copiar plan de la semana anterior</button><button class="btn sm sec" data-act="plan-from-log">⏪ Usar lo que comí la semana anterior</button></div>`;
   const orders = {};
   for (let i = 0; i < 7; i++) {
@@ -304,7 +345,7 @@ function viewSemana() {
   const mon = S.weekStart, w = weekStats(mon), prev = weekStats(addDays(mon, -7)), t = targets(), p = db.profile;
   const labels = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
   const delta = (a, b, u, inv) => (!prev.n || b == null || a == null) ? '' : `<span class="${(a - b) * (inv ? -1 : 1) >= 0 ? 'good' : 'badc'}">${a - b >= 0 ? '▲' : '▼'} ${Math.abs(r1(a - b))}${u}</span>`;
-  let h = `<div class="daynav"><button data-act="wweek" data-n="-1">‹</button><div class="t">${fmtDate(mon, { day: 'numeric', month: 'short' })} – ${fmtDate(addDays(mon, 6), { day: 'numeric', month: 'short' })}</div><button data-act="wweek" data-n="1">›</button></div>`;
+  let h = progressCard() + `<h2 style="margin:14px 0 8px">Balance de la semana</h2><div class="daynav"><button data-act="wweek" data-n="-1">‹</button><div class="t" data-act="cal" data-for="semana">📅 ${fmtDate(mon, { day: 'numeric', month: 'short' })} – ${fmtDate(addDays(mon, 6), { day: 'numeric', month: 'short' })}</div><button data-act="wweek" data-n="1">›</button></div>`;
   if (!w.n) return h + '<div class="card"><p class="empty">No hay comidas registradas esta semana. Registra tus días en la pestaña "Hoy" y aquí verás el balance.</p></div>';
 
   const fat = w.totalDef / 7700;
@@ -321,9 +362,15 @@ function viewSemana() {
   h += `<div class="card"><h3>Reparto de macros</h3>
     ${[['Proteínas', 'var(--p)', w.pctP, p.pP], ['Hidratos', 'var(--c)', w.pctC, p.pC], ['Grasas', 'var(--f)', w.pctF, p.pF]].map(([n, c, v, o]) => `<div class="macro"><div class="h"><span><span class="dot" style="background:${c}"></span>${n}</span><span><b>${r0(v)}%</b> (objetivo ${o}%)</span></div><div class="bar"><i style="width:${Math.min(100, v)}%;background:${c}"></i></div></div>`).join('')}
     <p class="muted">Media diaria: ${r0(w.p)} g P · ${r0(w.c)} g C · ${r0(w.f)} g G</p></div>`;
-  h += `<div class="card"><h3>⚖️ Peso</h3>${lineChart(w.days.map((x, i) => ({ l: labels[i], v: x.d.weight })), { unit: '' })}${w.wAvg ? `<p class="muted">Media semanal ${r1(w.wAvg)} kg ${delta(w.wAvg, prev.wAvg, ' kg', true)}${w.wN > 1 ? ` · variación en la semana ${r1(w.wLast - w.wFirst) > 0 ? '+' : ''}${r1(w.wLast - w.wFirst)} kg` : ''}</p>` : ''}</div>`;
+  h += `<div class="card"><h3>⚖️ Peso</h3>${lineChart(w.days.map((x, i) => ({ l: labels[i], v: x.d.weight })), { unit: '' })}${w.wAvg ? `<p class="muted">Media semanal ${r1(w.wAvg)} kg ${delta(w.wAvg, prev.wAvg, ' kg', true)}${w.wCount > 1 ? ` · variación en la semana ${r1(w.wLast - w.wFirst) > 0 ? '+' : ''}${r1(w.wLast - w.wFirst)} kg` : ''}</p>` : ''}</div>`;
   h += `<div class="card"><h3>👣 Pasos</h3>${w.steps ? barChart(w.days.map((x, i) => ({ l: labels[i], v: x.d.steps || 0 })), { target: p.stepsGoal, color: 'var(--c)' }) + `<p class="muted">Media ${r0(w.steps)} pasos/día (objetivo ${p.stepsGoal}) ${delta(w.steps, prev.steps, '')}</p>` : '<p class="empty">Anota tus pasos en "Hoy".</p>'}</div>`;
 
+  const tn = Object.entries(w.byType).sort((a, b) => b[1].min - a[1].min);
+  h += `<div class="card"><h3>💪 Ejercicio</h3>${w.wN || w.burned ? `<div class="grid3"><div class="stat"><b>${w.wN}</b><span>sesiones</span>${delta(w.wN, prev.wN, '')}</div><div class="stat"><b class="${w.wMin >= WEEK_MIN_GOAL ? 'good' : ''}">${w.wMin}</b><span>minutos (obj. ${WEEK_MIN_GOAL})</span>${delta(w.wMin, prev.wMin, '')}</div><div class="stat"><b>${r0(w.wKcal)}</b><span>kcal en ejercicios</span></div></div>
+    <div class="bar mt"><i style="width:${Math.min(100, w.wMin / WEEK_MIN_GOAL * 100)}%;background:var(--ex)"></i></div><p class="muted">${w.wMin >= WEEK_MIN_GOAL ? '✅ Has llegado a los ' + WEEK_MIN_GOAL + ' min semanales recomendados.' : `Te faltan ${WEEK_MIN_GOAL - w.wMin} min para los ${WEEK_MIN_GOAL} min semanales recomendados.`}</p>
+    <h3 class="mt">Minutos por día</h3>${barChart(w.days.map((x, i) => ({ l: labels[i], v: sum(workouts(x.d).map(k => k.min)) })), { color: 'var(--ex)' })}
+    ${tn.length ? tn.map(([k, v]) => `<div class="row between entry"><span>${SPORTS[k][0]}</span><span class="muted">${v.n} × · <b>${v.min} min</b></span></div>`).join('') : ''}
+    ${w.days.some(x => x.d.burned) ? `<h3 class="mt">Calorías activas del reloj</h3>${barChart(w.days.map((x, i) => ({ l: labels[i], v: x.d.burned || 0 })), { color: 'var(--ex)' })}` : ''}` : '<p class="empty">Registra tus entrenos en "Hoy → Ejercicio" para ver aquí minutos, sesiones y tipos de actividad.</p>'}</div>`;
   h += `<div class="card"><h2>💡 Qué corregir</h2>${advice(w, prev).map(a => `<div class="advice ${a[0]}">${a[1]}</div>`).join('')}</div>`;
 
   const bad = [];
@@ -347,7 +394,7 @@ function advice(w, prev) {
   else a.push(['', `✅ Proteína correcta: ${r0(w.p)} g/día (${r1(gkg)} g/kg de peso).`]);
   if (w.pctF > p.pF + 4) a.push(['warn', `Grasas altas: <b>${r0(w.pctF)}%</b> frente al ${p.pF}% objetivo. Revisa aceite, frutos secos y tuppers con más grasa.`]);
   if (w.pctC > p.pC + 6) a.push(['warn', `Hidratos por encima del objetivo (${r0(w.pctC)}% vs ${p.pC}%).`]);
-  if (w.wN >= 2 && w.n >= 4) {
+  if (w.wCount >= 2 && w.n >= 4) {
     const exp = -w.totalDef / 7700, real = w.wLast - w.wFirst;
     if (real > exp + 0.6) a.push(['warn', `El peso ha bajado menos de lo estimado (${r1(real)} kg real vs ${r1(exp)} kg esperado). Puede ser retención de líquidos o que estés infraestimando raciones; observa otra semana antes de bajar calorías.`]);
   }
@@ -529,10 +576,63 @@ function renderCatalog() {
 }
 const catFood = x => { const t = perTupper(x); return { name: x.name, type: 'tupper', unit: 'racion', kcal: r1(t.kcal), p: r1(t.p), c: r1(t.c), f: r1(t.f), serv: x.weight, nocId: x.id, url: x.url }; };
 
+// ───────── calendario ─────────
+let K = null;
+function openCal(f) {
+  const base = f === 'hoy' ? S.date : f === 'plan' ? S.planWeek : S.weekStart, d = parseD(base);
+  K = { f, y: d.getFullYear(), m: d.getMonth() }; renderCal();
+}
+function renderCal() {
+  const first = new Date(K.y, K.m, 1), off = (first.getDay() + 6) % 7, n = new Date(K.y, K.m + 1, 0).getDate(), today = todayS();
+  const cur = K.f === 'hoy' ? S.date : K.f === 'plan' ? S.planWeek : S.weekStart;
+  let cells = '';
+  for (let i = 0; i < off; i++) cells += '<i>.</i>';
+  for (let d = 1; d <= n; d++) {
+    const date = ds(new Date(K.y, K.m, d)), sel = K.f === 'hoy' ? date === cur : mondayOf(date) === cur;
+    const has = K.f === 'plan' ? getPlan(date).length > 0 : getDay(date).entries.length > 0;
+    cells += `<button class="${sel ? 'sel' : ''} ${date === today ? 'today' : ''} ${has ? 'has' : ''}" data-act="cal-pick" data-d="${date}">${d}</button>`;
+  }
+  openModal(`<div class="hd"><h2>📅 Ir a otro día</h2><button class="icon" data-act="close">✕</button></div>
+    <div class="daynav"><button data-act="cal-m" data-n="-1">‹</button><div class="t" style="text-transform:capitalize;cursor:default">${new Date(K.y, K.m, 1).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' })}</div><button data-act="cal-m" data-n="1">›</button></div>
+    <div class="cal">${['L', 'M', 'X', 'J', 'V', 'S', 'D'].map(x => `<div class="wd">${x}</div>`).join('')}${cells}</div>
+    <p class="muted">El punto marca los días con ${K.f === 'plan' ? 'plan' : 'comidas registradas'}.${K.f !== 'hoy' ? ' Al elegir un día se abre su semana.' : ''}</p>
+    <button class="btn sec block mt" data-act="cal-pick" data-d="${today}">Ir a hoy</button>`);
+}
+
+// ───────── ejercicio ─────────
+function openWorkout() {
+  M = { workout: true, date: S.date };
+  openModal(`<div class="hd"><h2>💪 Añadir ejercicio</h2><button class="icon" data-act="close">✕</button></div>
+    <div class="field"><label>Tipo</label><select id="w-type" data-live="work">${Object.entries(SPORTS).map(([k, v]) => `<option value="${k}">${v[0]}</option>`).join('')}</select></div>
+    <div class="grid2"><div class="field"><label>Minutos</label><input type="number" inputmode="numeric" id="w-min" data-live="work" value="30"></div>
+    <div class="field"><label>Calorías (opcional)</label><input type="number" inputmode="numeric" id="w-kcal" data-live="work" placeholder="si lo sabes (reloj)"></div></div>
+    <div id="w-prev" class="preview"></div><button class="btn block" data-act="work-save">Guardar</button>`);
+  updateWork();
+}
+function updateWork() {
+  const t = $('#w-type').value, min = num($('#w-min').value), est = SPORTS[t][1] * latestWeight(S.date) * min / 60, k = num($('#w-kcal').value);
+  $('#w-prev').innerHTML = k ? `<b>${r0(k)} kcal</b> (dato tuyo)` : `≈ <b>${r0(est)} kcal</b> estimadas (${SPORTS[t][1]} MET × ${r0(latestWeight(S.date))} kg × ${r1(min / 60)} h). Si tu reloj te da otro dato, escríbelo arriba.`;
+}
+
 // ───────── acciones ─────────
 const findEntry = (id, where, date) => (where === 'plan' ? getPlan(date || S.date) : getDay(S.date).entries).find(e => e.id === id);
 
 const A = {
+  cal: el => openCal(el.dataset.for),
+  'cal-m': el => { K.m += +el.dataset.n; if (K.m < 0) { K.m = 11; K.y--; } else if (K.m > 11) { K.m = 0; K.y++; } renderCal(); },
+  'cal-pick': el => {
+    const d = el.dataset.d; if (K.f === 'hoy') S.date = d; else if (K.f === 'plan') S.planWeek = mondayOf(d); else S.weekStart = mondayOf(d);
+    closeModal(); render(); window.scrollTo(0, 0);
+  },
+  wrange: el => { S.wRange = el.dataset.k; render(); },
+  'add-work': () => openWorkout(),
+  'work-save': () => {
+    const t = $('#w-type').value, min = num($('#w-min').value); if (min <= 0) return toast('Indica los minutos');
+    const given = num($('#w-kcal').value), est = SPORTS[t][1] * latestWeight(M.date) * min / 60;
+    getDay(M.date, true).workouts = [...workouts(getDay(M.date)), { id: uid(), type: t, min, kcal: r0(given || est), est: !given }];
+    save(); closeModal(); render(); toast('Ejercicio guardado ✔');
+  },
+  'del-work': el => { const d = getDay(S.date, true); d.workouts = workouts(d).filter(k => k.id !== el.dataset.id); save(); render(); },
   tab: el => { S.tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
   day: el => { S.date = addDays(S.date, +el.dataset.n); render(); },
   today: () => { S.date = todayS(); render(); },
@@ -660,6 +760,7 @@ document.addEventListener('input', ev => {
   else if (t.id === 'mq') { S.q = t.value; $('#mlist').innerHTML = foodListHtml(M.selId); }
   else if (t.dataset.live === 'lib') { M.qty = num($('#m-qty').value); M.mode = $('#m-mode').value; updatePreview(); }
   else if (t.dataset.live === 'form') updateFormPreview();
+  else if (t.dataset.live === 'work') updateWork();
   else if (t.dataset.c && C) { C[t.dataset.c] = t.value; $('#clist').innerHTML = catListHtml(); }
   else if (t.dataset.r) { R[t.dataset.r] = t.dataset.r === 'name' ? t.value : num(t.value); updateRTot(); }
   else if (t.dataset.ri) { R.ing[+t.dataset.i].qty = num(t.value); updateRTot(); }
