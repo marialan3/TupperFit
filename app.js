@@ -195,13 +195,14 @@ async function doBackup(share) {
 const S = { tab: 'hoy', date: todayS(), planWeek: mondayOf(todayS()), weekStart: mondayOf(todayS()), q: '', filter: 'all' };
 let M = null; // estado de la ventana "añadir"
 let R = null; // estado del editor de platos con ingredientes
+let C = null; // estado del catálogo de nococinomas
 
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.hidden = false;
   clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, 2600);
 }
 function openModal(html) { const m = $('#modal'); m.innerHTML = `<div class="sheet">${html}</div>`; m.hidden = false; }
-function closeModal() { $('#modal').hidden = true; $('#modal').innerHTML = ''; M = null; R = null; }
+function closeModal() { $('#modal').hidden = true; $('#modal').innerHTML = ''; M = null; R = null; C = null; }
 
 // ───────── vistas ─────────
 function render() {
@@ -273,7 +274,7 @@ const chipsHtml = () => `<div class="chips">${[['all', 'Todos'], ['fav', '⭐ Fa
 
 function viewAlimentos() {
   return `<div class="card"><h2>🍱 Mis alimentos y tuppers</h2><p class="muted">Guarda aquí tus platos favoritos con su información nutricional y añádelos a cualquier día con un toque.</p>
-    <div class="row wrap"><button class="btn" data-act="new-food">＋ Nuevo alimento</button><button class="btn sec" data-act="new-recipe">🍳 Plato con ingredientes</button><button class="btn sec" data-act="import">📋 Importar varios</button></div>
+    <div class="row wrap"><button class="btn" data-act="new-food">＋ Nuevo alimento</button><button class="btn sec" data-act="new-recipe">🍳 Plato con ingredientes</button><button class="btn sec" data-act="catalog">🔎 Catálogo nococinomas</button><button class="btn sec" data-act="import">📋 Importar varios</button></div>
     <div class="field mt"><input type="search" id="q" placeholder="Buscar…" value="${esc(S.q)}"></div>${chipsHtml()}<div id="foodlist">${foodListHtml()}</div></div>`;
 }
 
@@ -490,6 +491,43 @@ function updateRTot() {
   R.ing.forEach((i, k) => { const e = $(`#ri-m-${k}`); if (e) e.textContent = ingLine(i); });
 }
 
+// ───────── catálogo de nococinomas ─────────
+// data/nococinomas.json lo genera scripts/scrape_nococinomas.py (GitHub lo actualiza cada semana).
+async function openCatalog() {
+  C = { data: null, q: '', sort: 'ratio', maxK: '', minP: '', cat: 'all' };
+  openModal('<div class="hd"><h2>🔎 Catálogo nococinomas</h2><button class="icon" data-act="close">✕</button></div><p class="empty">Cargando catálogo…</p>');
+  try {
+    const r = await fetch('data/nococinomas.json', { cache: 'no-store' }); if (!r.ok) throw 0;
+    const d = await r.json(); if (!C) return; C.data = d;
+  } catch (e) { if (C) openModal('<div class="hd"><h2>🔎 Catálogo nococinomas</h2><button class="icon" data-act="close">✕</button></div><p>No se ha podido cargar el catálogo. Ábrela desde la dirección web publicada (no desde el archivo local) y con conexión a internet.</p>'); return; }
+  renderCatalog();
+}
+const perTupper = x => { const k = x.weight / 100; return { kcal: x.kcal * k, p: x.p * k, c: x.c * k, f: x.f * k }; };
+function catListHtml() {
+  const q = C.q.trim().toLowerCase(), maxK = num(C.maxK), minP = num(C.minP);
+  let l = C.data.items.map(x => ({ x, t: perTupper(x) })).filter(({ x, t }) => (!q || x.name.toLowerCase().includes(q)) && (C.cat === 'all' || x.cat === C.cat) && (!maxK || t.kcal <= maxK) && (!minP || t.p >= minP));
+  const key = { name: (a, b) => a.x.name.localeCompare(b.x.name), prot: (a, b) => b.t.p - a.t.p, kcal: (a, b) => a.t.kcal - b.t.kcal, ratio: (a, b) => b.t.p / (b.t.kcal || 1) - a.t.p / (a.t.kcal || 1) }[C.sort];
+  l.sort(key); const total = l.length; l = l.slice(0, 60);
+  if (!l.length) return '<p class="empty">Ningún tupper cumple esos filtros.</p>';
+  return `<p class="muted">${total} resultados${total > 60 ? ' (se muestran 60: afina los filtros)' : ''}</p>` + l.map(({ x, t }) => {
+    const saved = db.foods.some(f => f.nocId === x.id);
+    return `<div class="food"><div class="grow"><div class="n">${esc(x.name)}</div><div class="s muted">${r0(x.weight)} g · P ${r1(t.p)} · C ${r1(t.c)} · G ${r1(t.f)} · <b>${r0(t.p / (t.kcal || 1) * 100)} g P/100 kcal</b></div></div><div class="right"><b>${r0(t.kcal)}</b> kcal<br><button class="btn sm ${saved ? 'ghost' : 'sec'}" data-act="cat-save" data-id="${x.id}">${saved ? '✔ Guardado' : '＋ Guardar'}</button></div></div>`;
+  }).join('');
+}
+function renderCatalog() {
+  const cats = [...new Set(C.data.items.map(x => x.cat))].sort();
+  openModal(`<div class="hd"><h2>🔎 Catálogo nococinomas</h2><button class="icon" data-act="close">✕</button></div>
+    <p class="muted">${C.data.count} tuppers · datos de la web actualizados el ${fmtDate(C.data.updated, { day: 'numeric', month: 'long', year: 'numeric' })}. Los valores son <b>por tupper</b> (calculados con su peso).</p>
+    <div class="field"><input type="search" id="cq" data-c="q" placeholder="Buscar: pollo, lentejas, pasta…" value="${esc(C.q)}"></div>
+    <div class="grid2"><div class="field"><label>Ordenar por</label><select data-c="sort">${[['ratio', 'Más proteína por kcal'], ['prot', 'Más proteína'], ['kcal', 'Menos calorías'], ['name', 'Nombre']].map(([k, l]) => `<option value="${k}" ${C.sort === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="field"><label>Categoría</label><select data-c="cat"><option value="all">Todas</option>${cats.map(c => `<option ${C.cat === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
+    <div class="field"><label>Máx. kcal por tupper</label><input type="number" inputmode="numeric" data-c="maxK" value="${esc(C.maxK)}" placeholder="p. ej. 450"></div>
+    <div class="field"><label>Mín. proteína (g)</label><input type="number" inputmode="numeric" data-c="minP" value="${esc(C.minP)}" placeholder="p. ej. 30"></div></div>
+    <div class="row wrap" style="margin-bottom:8px"><button class="btn sm sec" data-act="cat-sync">🔄 Actualizar los que ya tengo guardados</button></div>
+    <div id="clist">${catListHtml()}</div>`);
+}
+const catFood = x => { const t = perTupper(x); return { name: x.name, type: 'tupper', unit: 'racion', kcal: r1(t.kcal), p: r1(t.p), c: r1(t.c), f: r1(t.f), serv: x.weight, nocId: x.id, url: x.url }; };
+
 // ───────── acciones ─────────
 const findEntry = (id, where, date) => (where === 'plan' ? getPlan(date || S.date) : getDay(S.date).entries).find(e => e.id === id);
 
@@ -559,6 +597,16 @@ const A = {
     toast('Plato guardado ✔');
   },
   'food-del-r': () => { if (confirm('¿Eliminar este plato? Los días ya registrados no cambian.')) { db.foods = db.foods.filter(x => x.id !== R.id); save(); closeModal(); render(); } },
+  catalog: () => openCatalog(),
+  'cat-save': el => {
+    const x = C.data.items.find(i => String(i.id) === el.dataset.id), ex = db.foods.find(f => f.nocId === x.id);
+    if (ex) { Object.assign(ex, catFood(x)); toast('Ya lo tenías: datos actualizados'); } else { db.foods.push({ id: uid(), fav: false, used: 0, ...catFood(x) }); toast('Guardado en tus alimentos ✔'); }
+    save(); const sc = $('.sheet').scrollTop; $('#clist').innerHTML = catListHtml(); $('.sheet').scrollTop = sc;
+  },
+  'cat-sync': () => {
+    let n = 0; db.foods.filter(f => f.nocId).forEach(f => { const x = C.data.items.find(i => i.id === f.nocId); if (x) { Object.assign(f, catFood(x)); n++; } });
+    save(); toast(n ? `${n} tuppers actualizados ✔` : 'No tienes tuppers del catálogo guardados');
+  },
   'new-food': () => { M = null; openModal(`<div class="hd"><h2>Nuevo alimento</h2><button class="icon" data-act="close">✕</button></div>${foodForm({ name: '', type: 'tupper', unit: 'racion', kcal: '', p: '', c: '', f: '' }, false)}<button class="btn block mt" data-act="food-save">Guardar</button>`); updateFormPreview(); },
   'edit-food': el => {
     const f = db.foods.find(x => x.id === el.dataset.id); if (f.ingredients) { M = null; return openRecipe(f, null); } M = { foodId: f.id };
@@ -611,6 +659,7 @@ document.addEventListener('input', ev => {
   else if (t.id === 'mq') { S.q = t.value; $('#mlist').innerHTML = foodListHtml(M.selId); }
   else if (t.dataset.live === 'lib') { M.qty = num($('#m-qty').value); M.mode = $('#m-mode').value; updatePreview(); }
   else if (t.dataset.live === 'form') updateFormPreview();
+  else if (t.dataset.c && C) { C[t.dataset.c] = t.value; $('#clist').innerHTML = catListHtml(); }
   else if (t.dataset.r) { R[t.dataset.r] = t.dataset.r === 'name' ? t.value : num(t.value); updateRTot(); }
   else if (t.dataset.ri) { R.ing[+t.dataset.i].qty = num(t.value); updateRTot(); }
   else if (t.id === 'rq') $('#rlist').innerHTML = recipeListHtml();
