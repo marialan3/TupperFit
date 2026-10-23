@@ -51,10 +51,10 @@ function load() {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const d = JSON.parse(raw);
-      return { profile: { ...DEF_PROFILE, ...(d.profile || {}) }, foods: d.foods || [], log: d.log || {}, plan: d.plan || {}, lastBackup: d.lastBackup || null, created: d.created || todayS() };
+      return { profile: { ...DEF_PROFILE, ...(d.profile || {}) }, foods: d.foods || [], log: d.log || {}, plan: d.plan || {}, lastBackup: d.lastBackup || null, created: d.created || todayS(), freeDays: d.freeDays || {} };
     }
   } catch (e) { console.warn('No se pudo leer', e); }
-  return { profile: { ...DEF_PROFILE }, foods: BASE_FOODS.map(f => ({ ...f })), log: {}, plan: {}, lastBackup: null, created: todayS() };
+  return { profile: { ...DEF_PROFILE }, foods: BASE_FOODS.map(f => ({ ...f })), log: {}, plan: {}, lastBackup: null, created: todayS(), freeDays: {} };
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(db)); }
@@ -66,6 +66,8 @@ const getDay = (date, create) => {
   return db.log[date] || { entries: [], weight: null, steps: null, burned: null, water: null, note: '', workouts: [] };
 };
 const workouts = d => d.workouts || [];
+const isFreeDay = date => !!db.freeDays[date];
+const isFreeEntry = (date, e) => isFreeDay(date) || !!e.free;
 const getPlan = (date, create) => { if (!db.plan[date] && create) db.plan[date] = []; return db.plan[date] || []; };
 
 // ───────── cálculos ─────────
@@ -98,18 +100,21 @@ function weekStats(mon) {
   const days = [];
   for (let i = 0; i < 7; i++) {
     const date = addDays(mon, i), d = getDay(date), t = totals(d.entries);
-    const logged = d.entries.length > 0;
-    days.push({ date, d, t, logged, exp: expenditure(date), def: logged ? expenditure(date) - t.kcal : 0 });
+    const logged = d.entries.length > 0, freeEs = d.entries.filter(e => isFreeEntry(date, e));
+    days.push({ date, d, t, logged, hasFree: freeEs.length > 0, tFree: totals(freeEs), exp: expenditure(date), def: logged ? expenditure(date) - t.kcal : 0 });
   }
-  const L = days.filter(x => x.logged), tg = targets();
-  const kcal = avg(L.map(x => x.t.kcal)), p = avg(L.map(x => x.t.p)), c = avg(L.map(x => x.t.c)), f = avg(L.map(x => x.t.f));
+  // Las medias y los avisos se calculan con los días "de plan" (sin comida libre); el déficit y la grasa estimada usan TODOS los días.
+  const L = days.filter(x => x.logged), PL = L.filter(x => !x.hasFree), B = PL.length ? PL : L, tg = targets();
+  const kcal = avg(B.map(x => x.t.kcal)), p = avg(B.map(x => x.t.p)), c = avg(B.map(x => x.t.c)), f = avg(B.map(x => x.t.f));
   const ws = days.filter(x => x.d.weight).map(x => x.d.weight);
   const st = days.filter(x => x.d.steps).map(x => x.d.steps);
   const kc = p * 4 + c * 4 + f * 9 || 1;
   return {
     days, L, n: L.length, kcal, p, c, f, pctP: p * 4 / kc * 100, pctC: c * 4 / kc * 100, pctF: f * 9 / kc * 100,
     deficit: avg(L.map(x => x.def)), totalDef: sum(L.map(x => x.def)),
-    inRange: L.filter(x => Math.abs(x.t.kcal - tg.kcal) <= tg.kcal * 0.05).length,
+    inRange: PL.filter(x => Math.abs(x.t.kcal - tg.kcal) <= tg.kcal * 0.05).length, np: PL.length, allFree: L.length > 0 && !PL.length,
+    freeDays: L.filter(x => x.hasFree).length, freeKcal: sum(L.map(x => x.tFree.kcal)), eaten: sum(L.map(x => x.t.kcal)),
+    freeMeals: sum(L.map(x => x.d.entries.filter(e => isFreeEntry(x.date, e)).length)), margin: sum(L.map(x => tg.kcal - x.t.kcal)),
     wAvg: ws.length ? avg(ws) : null, wFirst: ws[0] ?? null, wLast: ws.length ? ws[ws.length - 1] : null, wCount: ws.length,
     steps: st.length ? avg(st) : null, burned: avg(days.filter(x => x.d.burned).map(x => x.d.burned)),
     wMin: sum(days.map(x => sum(workouts(x.d).map(k => k.min)))), wKcal: sum(days.map(x => sum(workouts(x.d).map(k => k.kcal)))), wN: sum(days.map(x => workouts(x.d).length)),
@@ -190,18 +195,19 @@ function donut(p, c, f) {
   if (tot) k.forEach(([v, col]) => { const len = C * v / tot; segs += `<circle cx="40" cy="40" r="${R0}" fill="none" stroke="${col}" stroke-width="12" stroke-dasharray="${len} ${C - len}" stroke-dashoffset="${-off}" transform="rotate(-90 40 40)"/>`; off += len; });
   return `<svg viewBox="0 0 80 80" width="92" height="92" style="flex:none">${segs}<text x="40" y="38" text-anchor="middle" font-size="13" font-weight="700" fill="var(--text)">${r0(tot)}</text><text x="40" y="50" text-anchor="middle" font-size="8" fill="var(--muted)">kcal</text></svg>`;
 }
-function statusTag(tot, t) {
+function statusTag(tot, t, free) {
   const off = tot.kcal - t.kcal;
+  if (free && tot.kcal) return `<span class="tag" style="background:#ede9fe;color:#6d28d9">🎉 ${free}</span>`;
   return !tot.kcal ? '' : Math.abs(off) <= t.kcal * 0.05 ? '<span class="tag">✅ en objetivo</span>' : off > 0 ? `<span class="tag bad">⚠️ te pasas ${r0(off)} kcal</span>` : `<span class="tag warn">faltan ${r0(-off)} kcal</span>`;
 }
 // Resumen de un día con gráfico circular: ¿cubro mis macros y no me paso?
-function daySummary(tot, t) {
+function daySummary(tot, t, free) {
   const off = tot.kcal - t.kcal, kc = tot.p * 4 + tot.c * 4 + tot.f * 9 || 1, pr = db.profile;
-  const st = statusTag(tot, t);
+  const st = statusTag(tot, t, free);
   const warn = [];
-  if (tot.kcal && tot.p < t.p * 0.9) warn.push(`faltan ${r0(t.p - tot.p)} g de proteína`);
-  if (tot.f > t.f * 1.1) warn.push(`${r0(tot.f - t.f)} g de grasa de más`);
-  if (tot.c > t.c * 1.1) warn.push(`${r0(tot.c - t.c)} g de hidratos de más`);
+  if (free) { /* día libre: sin avisos */ } else if (tot.kcal && tot.p < t.p * 0.9) warn.push(`faltan ${r0(t.p - tot.p)} g de proteína`);
+  if (!free && tot.f > t.f * 1.1) warn.push(`${r0(tot.f - t.f)} g de grasa de más`);
+  if (!free && tot.c > t.c * 1.1) warn.push(`${r0(tot.c - t.c)} g de hidratos de más`);
   return `<div class="row" style="gap:12px">${donut(tot.p, tot.c, tot.f)}<div class="grow"><div><b>${r0(tot.kcal)}</b> / ${r0(t.kcal)} kcal ${st}</div>
     <div class="muted" style="font-size:.78rem;margin-bottom:5px">P ${r0(tot.p * 4 / kc * 100)}% · C ${r0(tot.c * 4 / kc * 100)}% · G ${r0(tot.f * 9 / kc * 100)}% (obj. ${pr.pP}/${pr.pC}/${pr.pF})</div>
     ${macroRow('Proteínas', 'var(--p)', tot.p, t.p)}${macroRow('Hidratos', 'var(--c)', tot.c, t.c)}${macroRow('Grasas', 'var(--f)', tot.f, t.f)}</div></div>${warn.length ? `<div class="warnc" style="font-size:.82rem">⚠️ ${warn.join(' · ')}</div>` : ''}`;
@@ -267,16 +273,18 @@ function viewHoy() {
   if (!db.profile.configured) h += `<div class="card"><b>👋 ¡Bienvenida!</b><p class="muted">Empieza configurando tu perfil para calcular tus calorías y macros objetivo.</p><button class="btn" data-act="tab" data-tab="ajustes">Configurar perfil</button></div>`;
 
   if (needsBackup()) h += `<div class="card" style="border-color:var(--warn)"><b>💾 Haz una copia de seguridad</b><p class="muted">${db.lastBackup ? `Hace ${backupDays()} días de tu última copia.` : `Aún no has hecho ninguna copia y llevas ${backupDays()} días de datos.`} Si se borran los datos del navegador, se perderían.</p><button class="btn" data-act="backup-share">Guardar copia ahora</button></div>`;
-  h += `<div class="card"><div class="row" style="gap:14px">${ring(tot.kcal / t.kcal, over ? 'var(--bad)' : 'var(--kcal)', r0(Math.abs(rem)), over ? 'kcal de más' : 'kcal restantes')}
+  h += `<div class="card"><div class="row" style="gap:14px">${ring(tot.kcal / t.kcal, over ? (isFreeDay(date) ? 'var(--ex)' : 'var(--bad)') : 'var(--kcal)', r0(Math.abs(rem)), over ? 'kcal de más' : 'kcal restantes')}
     <div class="grow"><div class="muted">Comido</div><b style="font-size:1.3rem">${r0(tot.kcal)}</b> <span class="muted">/ ${r0(t.kcal)} kcal</span>
     <div class="muted mt">Reparto actual</div><div style="font-size:.85rem">P ${r0(tot.p * 4 / kc * 100)}% · C ${r0(tot.c * 4 / kc * 100)}% · G ${r0(tot.f * 9 / kc * 100)}%</div>
     <div class="muted">Objetivo: P ${db.profile.pP}% · C ${db.profile.pC}% · G ${db.profile.pF}%</div></div></div>
     <div class="mt">${macroRow('Proteínas', 'var(--p)', tot.p, t.p)}${macroRow('Hidratos', 'var(--c)', tot.c, t.c)}${macroRow('Grasas', 'var(--f)', tot.f, t.f)}</div>
     ${day.entries.length ? `<div class="row between wrap" style="font-size:.85rem"><span class="muted">Gasto estimado ${r0(exp)} kcal${day.burned > 0 ? ' (con tu reloj)' : ''}</span><span class="${def >= 0 ? 'good' : 'badc'}"><b>${def >= 0 ? 'Déficit' : 'Superávit'} ${r0(Math.abs(def))} kcal</b></span></div>` : ''}</div>`;
 
+  const fd = isFreeDay(date), fk = totals(day.entries.filter(e => isFreeEntry(date, e))).kcal;
+  h += `<div class="row wrap" style="margin:-4px 0 12px"><button class="btn sm ${fd ? '' : 'ghost'}" style="${fd ? 'background:var(--ex)' : ''}" data-act="free-day" data-date="${date}">🎉 ${fd ? 'Día libre ✔ (quitar)' : 'Marcar como día libre'}</button>${fk ? `<span class="muted">${r0(fk)} kcal libres</span>` : ''}</div>${fd ? '<p class="muted" style="margin-top:-6px">Hoy es día libre: se registra tal cual (cuenta en tu déficit real) pero no se considera un fallo ni entra en las medias del plan.</p>' : ''}`;
   if (plan.length) {
     h += `<div class="card plancard"><div class="row between"><h3>🗓️ Planificado para hoy</h3><button class="btn sm" data-act="plan-reg-all">Registrar todo</button></div>`;
-    plan.forEach(e => { const m = eM(e); h += `<div class="entry"><div class="grow"><div class="n">${esc(e.name)}</div><div class="s">${MEALS.find(x => x[0] === e.meal)[1]} · ${qtyLabel(e)}</div></div><span class="k">${r0(m.kcal)}</span><button class="icon" data-act="plan-reg" data-id="${e.id}" title="Registrar">✅</button></div>`; });
+    plan.forEach(e => { const m = eM(e); h += `<div class="entry"><div class="grow"><div class="n">${e.free ? '🎉 ' : ''}${esc(e.name)}</div><div class="s">${MEALS.find(x => x[0] === e.meal)[1]} · ${qtyLabel(e)}</div></div><span class="k">${r0(m.kcal)}</span><button class="icon" data-act="plan-reg" data-id="${e.id}" title="Registrar">✅</button></div>`; });
     h += '</div>';
   }
 
@@ -287,7 +295,7 @@ function viewHoy() {
     if (!es.length) h += '<div class="empty">Nada registrado</div>';
     es.forEach(e => {
       const m = eM(e);
-      h += `<div class="entry" data-act="edit-entry" data-id="${e.id}" data-where="log"><div class="grow"><div class="n">${esc(e.name)}</div><div class="s">${qtyLabel(e)} · P ${r0(m.p)} · C ${r0(m.c)} · G ${r0(m.f)}</div></div><span class="k">${r0(m.kcal)}</span><button class="icon" data-act="del-entry" data-id="${e.id}" data-where="log" title="Quitar">🗑️</button></div>`;
+      h += `<div class="entry" data-act="edit-entry" data-id="${e.id}" data-where="log"><div class="grow"><div class="n">${e.free ? '🎉 ' : ''}${esc(e.name)}</div><div class="s">${qtyLabel(e)} · P ${r0(m.p)} · C ${r0(m.c)} · G ${r0(m.f)}</div></div><span class="k">${r0(m.kcal)}</span><button class="icon" data-act="del-entry" data-id="${e.id}" data-where="log" title="Quitar">🗑️</button></div>`;
     });
     h += `<button class="btn sm sec mt" data-act="add" data-target="log" data-meal="${key}">＋ Añadir</button></div>`;
   });
@@ -323,24 +331,33 @@ function viewAlimentos() {
     <div class="field mt"><input type="search" id="q" placeholder="Buscar…" value="${esc(S.q)}"></div>${chipsHtml()}<div id="foodlist">${foodListHtml()}</div></div>`;
 }
 
+function planBudget(mon, t) {
+  const ds7 = [0, 1, 2, 3, 4, 5, 6].map(i => addDays(mon, i)), pl = ds7.filter(d => getPlan(d).length), eaten = sum(pl.map(d => totals(getPlan(d)).kcal));
+  if (!pl.length) return '';
+  const free = sum(ds7.map(d => totals(getPlan(d).filter(e => isFreeEntry(d, e))).kcal)), margin = pl.length * t.kcal - eaten;
+  return `<div class="card"><h3>⚖️ Presupuesto de la semana</h3><div class="row between"><span>Planificado (${pl.length} ${pl.length === 1 ? 'día' : 'días'})</span><b>${r0(eaten)} kcal</b></div><div class="row between"><span>Presupuesto (${pl.length} × ${r0(t.kcal)})</span><b>${r0(pl.length * t.kcal)} kcal</b></div>
+    <div class="advice ${margin >= 0 ? '' : 'bad'} mt">${margin >= 0 ? `✅ Te quedan <b>${r0(margin)} kcal</b> de margen: es lo que puedes gastar en comidas libres sin salirte del déficit previsto.` : `⚠️ Con este plan te pasas <b>${r0(-margin)} kcal</b> sobre el presupuesto semanal. Reduce algún día para compensar la comida libre.`}</div>${free ? `<p class="muted">Incluye ${r0(free)} kcal en comidas libres.</p>` : ''}</div>`;
+}
 function viewPlan() {
   const mon = S.planWeek, t = targets(), today = todayS();
   let h = `<div class="daynav"><button data-act="pweek" data-n="-1">‹</button><div class="t" data-act="cal" data-for="plan">📅 Semana del ${fmtDate(mon, { day: 'numeric', month: 'short' })}</div><button data-act="pweek" data-n="1">›</button></div>
     <div class="row wrap" style="margin-bottom:10px"><button class="btn sm sec" data-act="plan-copy-prev">📋 Copiar plan de la semana anterior</button><button class="btn sm sec" data-act="plan-from-log">⏪ Usar lo que comí la semana anterior</button></div>
+    ${planBudget(mon, t)}
     <div class="row wrap" style="margin-bottom:10px"><button class="btn sm ghost" data-act="pall" data-k="open">Desplegar todos</button><button class="btn sm ghost" data-act="pall" data-k="close">Plegar todos</button></div>`;
   const orders = {};
   for (let i = 0; i < 7; i++) {
     const date = addDays(mon, i), es = getPlan(date), tot = totals(es);
+    const fl = isFreeDay(date) ? 'día libre' : es.some(e => e.free) ? 'con comida libre' : '';
     const open = S.pOpen[date] ?? es.length === 0; // los días con comidas se pliegan solos
     es.forEach(e => { if (db.foods.find(f => f.id === e.foodId)?.type === 'tupper') orders[e.name] = (orders[e.name] || 0) + e.qty; });
-    h += `<div class="card pday ${date === today ? 'today' : ''}"><h3 data-act="pday" data-date="${date}" style="cursor:pointer"><span style="text-transform:capitalize">${open ? '▾' : '▸'} ${fmtDate(date, { weekday: 'long', day: 'numeric' })}</span>${!open && es.length ? `<span style="font-weight:400;font-size:.85rem">${statusTag(tot, t)} <b>${r0(tot.kcal)}</b> kcal · P ${r0(tot.p)} g</span>` : ''}</h3>`;
+    h += `<div class="card pday ${date === today ? 'today' : ''}"><h3 data-act="pday" data-date="${date}" style="cursor:pointer"><span style="text-transform:capitalize">${open ? '▾' : '▸'} ${fmtDate(date, { weekday: 'long', day: 'numeric' })}${isFreeDay(date) ? ' 🎉' : ''}</span>${!open && es.length ? `<span style="font-weight:400;font-size:.85rem">${statusTag(tot, t, fl)} <b>${r0(tot.kcal)}</b> kcal · P ${r0(tot.p)} g</span>` : ''}</h3>`;
     if (open) {
-      h += es.length ? `<div style="margin-bottom:6px">${daySummary(tot, t)}</div>` : '<div class="empty">Sin planificar</div>';
+      h += es.length ? `<div style="margin-bottom:6px">${daySummary(tot, t, fl)}</div>` : '<div class="empty">Sin planificar</div>';
       MEALS.forEach(([key, name, ic]) => es.filter(e => e.meal === key).forEach(e => {
         const m = eM(e);
-        h += `<div class="entry" data-act="edit-entry" data-id="${e.id}" data-where="plan" data-date="${date}"><span>${ic}</span><div class="grow"><div class="n">${esc(e.name)}</div><div class="s">${qtyLabel(e)} · P ${r0(m.p)}</div></div><span class="k">${r0(m.kcal)}</span><button class="icon" data-act="del-entry" data-id="${e.id}" data-where="plan" data-date="${date}">🗑️</button></div>`;
+        h += `<div class="entry" data-act="edit-entry" data-id="${e.id}" data-where="plan" data-date="${date}"><span>${ic}</span><div class="grow"><div class="n">${e.free ? '🎉 ' : ''}${esc(e.name)}</div><div class="s">${qtyLabel(e)} · P ${r0(m.p)}</div></div><span class="k">${r0(m.kcal)}</span><button class="icon" data-act="del-entry" data-id="${e.id}" data-where="plan" data-date="${date}">🗑️</button></div>`;
       }));
-      h += `<div class="row wrap mt"><button class="btn sm sec" data-act="add" data-target="plan" data-date="${date}" data-meal="almuerzo">＋ Añadir</button>${es.length ? `<button class="btn sm ghost" data-act="plan-dup" data-date="${date}">Duplicar al día siguiente</button>` : ''}</div>`;
+      h += `<div class="row wrap mt"><button class="btn sm sec" data-act="add" data-target="plan" data-date="${date}" data-meal="almuerzo">＋ Añadir</button>${es.length ? `<button class="btn sm ghost" data-act="plan-dup" data-date="${date}">Duplicar al día siguiente</button>` : ''}<button class="btn sm ghost" data-act="free-day" data-date="${date}">🎉 ${isFreeDay(date) ? 'Quitar día libre' : 'Día libre'}</button></div>`;
     }
     h += '</div>';
   }
@@ -358,14 +375,17 @@ function viewSemana() {
 
   const fat = w.totalDef / 7700;
   h += `<div class="card"><h2>Resumen</h2><div class="grid3">
-    <div class="stat"><b>${r0(w.kcal)}</b><span>kcal/día (obj. ${r0(t.kcal)})</span>${delta(w.kcal, prev.kcal, '', true)}</div>
+    <div class="stat"><b>${r0(w.kcal)}</b><span>kcal/día${w.freeDays ? ' (sin comidas libres)' : ''} · obj. ${r0(t.kcal)}</span>${delta(w.kcal, prev.kcal, '', true)}</div>
     <div class="stat"><b>${r0(w.p)} g</b><span>proteína/día (obj. ${r0(t.p)})</span>${delta(w.p, prev.p, '')}</div>
     <div class="stat"><b>${w.n}/7</b><span>días registrados</span></div>
     <div class="stat"><b class="${w.deficit >= 0 ? 'good' : 'badc'}">${r0(w.deficit)}</b><span>déficit medio kcal/día</span></div>
     <div class="stat"><b>${r1(fat)} kg</b><span>grasa estimada perdida</span></div>
-    <div class="stat"><b>${w.inRange}/${w.n}</b><span>días en objetivo (±5%)</span></div></div></div>`;
+    <div class="stat"><b>${w.inRange}/${w.np}</b><span>días de plan en objetivo (±5%)</span></div></div>${w.freeDays ? `<p class="muted mt">Las medias y avisos no cuentan los ${w.freeDays} ${w.freeDays === 1 ? 'día' : 'días'} con comida libre. El déficit y la grasa estimada sí incluyen todo lo que comiste.</p>` : ''}</div>`;
 
-  h += `<div class="card"><h3>Calorías por día</h3>${barChart(w.days.map((x, i) => ({ l: labels[i], v: x.logged ? x.t.kcal : 0, color: x.t.kcal > t.kcal * 1.05 ? 'var(--bad)' : 'var(--kcal)' })), { target: t.kcal })}<p class="muted">Línea roja = tu objetivo (${r0(t.kcal)} kcal).</p></div>`;
+  h += `<div class="card"><h3>Calorías por día</h3>${barChart(w.days.map((x, i) => ({ l: labels[i], v: x.logged ? x.t.kcal : 0, color: x.hasFree ? 'var(--ex)' : x.t.kcal > t.kcal * 1.05 ? 'var(--bad)' : 'var(--kcal)' })), { target: t.kcal })}<p class="muted">Línea roja = tu objetivo (${r0(t.kcal)} kcal). Morado = día con comida libre.</p></div>`;
+  const wb = w.margin, rem = w.days.filter(x => !x.logged).length;
+  h += `<div class="card"><h3>🎉 Comidas libres y presupuesto</h3>${w.freeMeals ? `<div class="grid3"><div class="stat"><b>${w.freeDays}</b><span>${w.freeDays === 1 ? 'día' : 'días'} con comida libre</span></div><div class="stat"><b>${r0(w.freeKcal)}</b><span>kcal libres</span></div><div class="stat"><b>${r0(w.freeKcal / (w.eaten || 1) * 100)}%</b><span>de lo que comiste</span></div></div><p class="muted">Si no las compensas, ${r0(w.freeKcal)} kcal equivalen a unos ${r1(w.freeKcal / 7700)} kg de grasa. Con una comida libre a la semana y el resto en plan, el déficit se mantiene.</p>` : '<p class="muted">No has marcado comidas libres esta semana. En "Hoy" puedes marcar un día libre, o añadir una comida con la casilla 🎉 o en la pestaña "Libre".</p>'}
+    <div class="advice ${wb >= 0 ? '' : 'bad'}">${wb >= 0 ? `⚖️ Presupuesto semanal: te sobran <b>${r0(wb)} kcal</b>${rem ? ` (contando ${rem} ${rem === 1 ? 'día sin registrar' : 'días sin registrar'} justo en tu objetivo)` : ''}. Es tu margen para una comida libre.` : `⚖️ Presupuesto semanal: te has pasado <b>${r0(-wb)} kcal</b>${rem ? ` (contando ${rem} ${rem === 1 ? 'día sin registrar' : 'días sin registrar'} en tu objetivo)` : ''}. Intenta compensar en los próximos días.`}</div></div>`;
   h += `<div class="card"><h3>Proteína por día (g)</h3>${barChart(w.days.map((x, i) => ({ l: labels[i], v: x.logged ? x.t.p : 0 })), { target: t.p, color: 'var(--p)' })}</div>`;
   h += `<div class="card"><h3>Reparto de macros</h3>
     ${[['Proteínas', 'var(--p)', w.pctP, p.pP], ['Hidratos', 'var(--c)', w.pctC, p.pC], ['Grasas', 'var(--f)', w.pctF, p.pF]].map(([n, c, v, o]) => `<div class="macro"><div class="h"><span><span class="dot" style="background:${c}"></span>${n}</span><span><b>${r0(v)}%</b> (objetivo ${o}%)</span></div><div class="bar"><i style="width:${Math.min(100, v)}%;background:${c}"></i></div></div>`).join('')}
@@ -382,7 +402,7 @@ function viewSemana() {
   h += `<div class="card"><h2>💡 Qué corregir</h2>${advice(w, prev).map(a => `<div class="advice ${a[0]}">${a[1]}</div>`).join('')}</div>`;
 
   const bad = [];
-  w.L.forEach(x => x.d.entries.forEach(e => { if (mismatch({ ...e.base })) bad.push(e); }));
+  w.L.forEach(x => x.d.entries.forEach(e => { if (!e.free && mismatch({ ...e.base })) bad.push(e); }));
   if (bad.length) h += `<div class="card"><h3>🔎 Revisión de datos</h3><p class="muted">Estos alimentos tienen kcal que no cuadran con sus macros (4·P + 4·C + 9·G). Puede ser por fibra, polioles, alcohol o un dato mal copiado:</p>${[...new Set(bad.map(e => e.name))].map(n => { const e = bad.find(b => b.name === n), k = calcKcal(e.base.p, e.base.c, e.base.f); return `<div class="entry"><span class="grow">${esc(n)}</span><span class="muted">dice ${r0(e.base.kcal)} · macros ${r0(k)}</span></div>`; }).join('')}</div>`;
 
   h += `<div class="card"><h3>Planificar la semana siguiente</h3><p class="muted">Copia lo que comiste esta semana como borrador del plan de la próxima y ajústalo.</p><button class="btn" data-act="plan-next-from-week">🗓️ Crear plan de la próxima semana</button></div>`;
@@ -392,16 +412,17 @@ function viewSemana() {
 function advice(w, prev) {
   const a = [], t = targets(), p = db.profile, kg = latestWeight(addDays(w.days[6].date, 0));
   if (w.n < 5) a.push(['warn', `Solo has registrado ${w.n} días: cuantos más registres, más fiables son las conclusiones.`]);
-  const dk = w.kcal - t.kcal;
-  if (dk > t.kcal * 0.05) a.push(['bad', `Te has pasado una media de <b>${r0(dk)} kcal/día</b> sobre tu objetivo. Mira qué días se disparan (gráfico de calorías) y ajusta meriendas o cenas.`]);
+  const on = !w.allFree, dk = w.kcal - t.kcal;
+  if (!on) a.push(['', '🎉 Todos los días registrados tienen comida libre: no hay días "de plan" para valorar calorías y macros.']);
+  else if (dk > t.kcal * 0.05) a.push(['bad', `Te has pasado una media de <b>${r0(dk)} kcal/día</b> sobre tu objetivo. Mira qué días se disparan (gráfico de calorías) y ajusta meriendas o cenas.`]);
   else if (dk < -t.kcal * 0.15) a.push(['warn', `Has comido <b>${r0(-dk)} kcal/día por debajo</b> del objetivo. Un déficit demasiado agresivo aumenta el hambre y puede hacerte perder músculo.`]);
   else a.push(['', `✅ Calorías en el objetivo (${r0(w.kcal)} de ${r0(t.kcal)} kcal/día de media).`]);
-  if (w.kcal < bmr() && w.kcal > 0) a.push(['bad', `Tu media (${r0(w.kcal)} kcal) está por debajo de tu metabolismo basal (~${r0(bmr())} kcal). Conviene subir un poco las calorías.`]);
+  if (on && w.kcal < bmr() && w.kcal > 0) a.push(['bad', `Tu media (${r0(w.kcal)} kcal) está por debajo de tu metabolismo basal (~${r0(bmr())} kcal). Conviene subir un poco las calorías.`]);
   const gkg = w.p / kg;
-  if (w.p < t.p * 0.9) a.push(['warn', `Proteína baja: <b>${r0(w.p)} g/día</b> frente a ${r0(t.p)} g objetivo (${r1(gkg)} g/kg). Añade yogur griego/skyr, claras, atún o un tupper más proteico.`]);
-  else a.push(['', `✅ Proteína correcta: ${r0(w.p)} g/día (${r1(gkg)} g/kg de peso).`]);
-  if (w.pctF > p.pF + 4) a.push(['warn', `Grasas altas: <b>${r0(w.pctF)}%</b> frente al ${p.pF}% objetivo. Revisa aceite, frutos secos y tuppers con más grasa.`]);
-  if (w.pctC > p.pC + 6) a.push(['warn', `Hidratos por encima del objetivo (${r0(w.pctC)}% vs ${p.pC}%).`]);
+  if (!on) { /* sin días de plan */ } else if (w.p < t.p * 0.9) a.push(['warn', `Proteína baja: <b>${r0(w.p)} g/día</b> frente a ${r0(t.p)} g objetivo (${r1(gkg)} g/kg). Añade yogur griego/skyr, claras, atún o un tupper más proteico.`]);
+  else if (on) a.push(['', `✅ Proteína correcta: ${r0(w.p)} g/día (${r1(gkg)} g/kg de peso).`]);
+  if (on && w.pctF > p.pF + 4) a.push(['warn', `Grasas altas: <b>${r0(w.pctF)}%</b> frente al ${p.pF}% objetivo. Revisa aceite, frutos secos y tuppers con más grasa.`]);
+  if (on && w.pctC > p.pC + 6) a.push(['warn', `Hidratos por encima del objetivo (${r0(w.pctC)}% vs ${p.pC}%).`]);
   if (w.wCount >= 2 && w.n >= 4) {
     const exp = -w.totalDef / 7700, real = w.wLast - w.wFirst;
     if (real > exp + 0.6) a.push(['warn', `El peso ha bajado menos de lo estimado (${r1(real)} kg real vs ${r1(exp)} kg esperado). Puede ser retención de líquidos o que estés infraestimando raciones; observa otra semana antes de bajar calorías.`]);
@@ -450,19 +471,27 @@ const mealSelect = id => `<select id="${id}">${MEALS.map(([k, n]) => `<option va
 function renderAdd() {
   const title = M.target === 'plan' ? `Planificar · ${fmtDate(M.date, { weekday: 'long', day: 'numeric' })}` : 'Añadir comida';
   let h = `<div class="hd"><h2>${title}</h2><button class="icon" data-act="close">✕</button></div>
-    <div class="seg"><button class="${M.tab === 'lib' ? 'on' : ''}" data-act="mtab" data-k="lib">Mis alimentos</button><button class="${M.tab === 'new' ? 'on' : ''}" data-act="mtab" data-k="new">Nuevo / calculadora</button><button data-act="recipe-from-add">🍳 Receta</button></div><div id="m-day" class="preview"></div>`;
+    <div class="seg"><button class="${M.tab === 'lib' ? 'on' : ''}" data-act="mtab" data-k="lib">Mis alimentos</button><button class="${M.tab === 'new' ? 'on' : ''}" data-act="mtab" data-k="new">Nuevo</button><button data-act="recipe-from-add">🍳 Receta</button><button class="${M.tab === 'free' ? 'on' : ''}" data-act="mtab" data-k="free">🎉 Libre</button></div><div id="m-day" class="preview"></div>`;
   if (M.tab === 'lib') {
     const f = db.foods.find(x => x.id === M.selId);
     h += `<div class="field"><input type="search" id="mq" placeholder="Buscar…" value="${esc(S.q)}"></div>${chipsHtml()}<div id="mlist" style="max-height:34vh;overflow-y:auto">${foodListHtml(M.selId)}</div>`;
     if (f) {
-      h += `<div class="card" style="margin-top:10px"><b>${esc(f.name)}</b><div class="field mt"><label>${f.unit === '100g' ? 'Los valores son por 100 g: indica el peso real que has comido' : '¿Cuánto has comido?'}</label><div class="row"><input type="number" inputmode="decimal" id="m-qty" data-live="lib" value="${M.qty}" step="any"><select id="m-mode" data-live="lib" style="width:auto">${modeOpts(f).map(([k, l]) => `<option value="${k}" ${M.mode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div><div class="field"><label>Comida</label>${mealSelect('m-meal')}</div>${f.ingredients ? `<div class="muted" style="font-size:.8rem">🍳 Plato completo (${r1(f.servings)} ${f.servings === 1 ? 'ración' : 'raciones'}): ${f.ingredients.map(i => `${esc(i.name)} ${r1(i.qty)}${i.unit === '100g' ? ' g' : ' rac.'}`).join(' · ')}</div>` : ''}<div id="m-prev" class="preview"></div><button class="btn block" data-act="add-confirm">Añadir</button></div>`;
+      h += `<div class="card" style="margin-top:10px"><b>${esc(f.name)}</b><div class="field mt"><label>${f.unit === '100g' ? 'Los valores son por 100 g: indica el peso real que has comido' : '¿Cuánto has comido?'}</label><div class="row"><input type="number" inputmode="decimal" id="m-qty" data-live="lib" value="${M.qty}" step="any"><select id="m-mode" data-live="lib" style="width:auto">${modeOpts(f).map(([k, l]) => `<option value="${k}" ${M.mode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div><div class="field"><label>Comida</label>${mealSelect('m-meal')}</div>${f.ingredients ? `<div class="muted" style="font-size:.8rem">🍳 Plato completo (${r1(f.servings)} ${f.servings === 1 ? 'ración' : 'raciones'}): ${f.ingredients.map(i => `${esc(i.name)} ${r1(i.qty)}${i.unit === '100g' ? ' g' : ' rac.'}`).join(' · ')}</div>` : ''}<label class="row" style="color:var(--text)"><input type="checkbox" id="m-free" style="width:auto"> 🎉 Comida libre (fuera de plan)</label><div id="m-prev" class="preview"></div><button class="btn block" data-act="add-confirm">Añadir</button></div>`;
     }
-  } else h += foodForm({ name: '', type: 'producto', unit: '100g', kcal: '', p: '', c: '', f: '' }, true);
+  } else if (M.tab === 'free') h += freeForm();
+  else h += foodForm({ name: '', type: 'producto', unit: '100g', kcal: '', p: '', c: '', f: '' }, true);
   openModal(h);
-  if (M.tab === 'lib') updatePreview(); else updateFormPreview();
-  if (!$('#m-prev')) updDay(null);
+  if (M.tab === 'lib') updatePreview(); else if (M.tab === 'new') updateFormPreview(); else updDay(null);
 }
 
+const FREE_PRESETS = [['Pizza (½ pizza grande)', 900, 38, 100, 36], ['Hamburguesa con patatas', 1000, 40, 90, 50], ['Menú de restaurante', 1100, 45, 95, 55], ['Tapas / raciones', 800, 35, 50, 48], ['Postre / helado', 350, 5, 45, 16], ['Picoteo / chocolatina', 250, 3, 30, 13], ['Caña de cerveza', 90, 1, 7, 0], ['Copa de vino', 125, 0, 4, 0]];
+function freeForm() {
+  return `<p class="muted">Para una comida fuera de plan. Cuenta en tus calorías reales, pero no se considera un fallo en el balance semanal. Elige una estimación o escribe la tuya (son valores orientativos).</p>
+  <div class="chips" style="flex-wrap:wrap">${FREE_PRESETS.map((x, i) => `<button class="chip" data-act="fr-preset" data-i="${i}">${x[0]}</button>`).join('')}</div>
+  <div class="field"><label>¿Qué has comido?</label><input type="text" id="fr-name" placeholder="p. ej. Cena con amigos"></div>
+  <div class="grid4"><div class="field"><label>kcal</label><input type="number" inputmode="decimal" id="fr-kcal" step="any"></div><div class="field"><label>Prot. (g)</label><input type="number" inputmode="decimal" id="fr-p" step="any"></div><div class="field"><label>Hidr. (g)</label><input type="number" inputmode="decimal" id="fr-c" step="any"></div><div class="field"><label>Grasas (g)</label><input type="number" inputmode="decimal" id="fr-f" step="any"></div></div>
+  <div class="field"><label>Comida</label>${mealSelect('m-meal')}</div><button class="btn block" data-act="free-confirm">Añadir comida libre</button>`;
+}
 function foodForm(f, withQty) {
   return `<p class="muted">Introduce la información nutricional de la etiqueta. Si dejas las kcal vacías, se calculan a partir de las macros.</p>
   <div class="field"><label>Nombre</label><input type="text" id="f-name" value="${esc(f.name)}" placeholder="p. ej. Pollo al curry con arroz"></div>
@@ -474,6 +503,7 @@ function foodForm(f, withQty) {
   <p class="muted" style="margin-top:-4px">Con este dato podrás añadirlo luego por unidades o por gramos reales.</p>
   ${withQty ? `<div class="grid2 mt"><div class="field"><label id="f-qtylbl">Cantidad</label><input type="number" inputmode="decimal" id="f-qty" data-live="form" value="${f.unit === 'racion' ? 1 : 100}" step="any"></div><div class="field"><label>Comida</label>${mealSelect('m-meal')}</div></div><div id="m-prev" class="preview"></div>
   <label class="row" style="color:var(--text)"><input type="checkbox" id="f-save" style="width:auto" checked> Guardar en mis alimentos</label>
+  <label class="row" style="color:var(--text)"><input type="checkbox" id="f-free" style="width:auto"> 🎉 Comida libre (fuera de plan)</label>
   <button class="btn block mt" data-act="new-confirm">Añadir a ${M.target === 'plan' ? 'plan' : 'hoy'}</button>` : `<label class="row" style="color:var(--text)"><input type="checkbox" id="f-fav" style="width:auto" ${f.fav ? 'checked' : ''}> ⭐ Favorito</label>`}`;
 }
 function readForm() {
@@ -504,8 +534,9 @@ function updDay(m) {
   el.innerHTML = `<div class="muted" style="font-size:.75rem">${m ? 'El día quedaría así' : 'Llevas en este día'}</div><b class="${cl(x.kcal, t.kcal)}">${r0(x.kcal)}</b> / ${r0(t.kcal)} kcal · <span class="${cl(x.p, t.p)}">P ${r0(x.p)}/${r0(t.p)}</span> · <span class="${cl(x.c, t.c)}">C ${r0(x.c)}/${r0(t.c)}</span> · <span class="${cl(x.f, t.f)}">G ${r0(x.f)}/${r0(t.f)}</span>`;
 }
 
-function pushEntry(f, qty, meal) {
+function pushEntry(f, qty, meal, free) {
   const e = { id: uid(), meal, name: f.name, qty, unit: f.unit, base: { kcal: f.kcal, p: f.p, c: f.c, f: f.f }, foodId: f.id };
+  if (free) e.free = true;
   if (M.target === 'plan') { getPlan(M.date, true).push(e); S.pOpen[M.date] = true; } else getDay(M.date, true).entries.push(e);
 }
 
@@ -643,6 +674,13 @@ const A = {
   'del-work': el => { const d = getDay(S.date, true); d.workouts = workouts(d).filter(k => k.id !== el.dataset.id); save(); render(); },
   pday: el => { const d = el.dataset.date, es = getPlan(d); S.pOpen[d] = !(S.pOpen[d] ?? es.length === 0); render(); },
   pall: el => { for (let i = 0; i < 7; i++) S.pOpen[addDays(S.planWeek, i)] = el.dataset.k === 'open'; render(); },
+  'free-day': el => { const d = el.dataset.date; if (db.freeDays[d]) delete db.freeDays[d]; else db.freeDays[d] = true; save(); render(); },
+  'fr-preset': el => { const x = FREE_PRESETS[+el.dataset.i]; $('#fr-name').value = x[0]; $('#fr-kcal').value = x[1]; $('#fr-p').value = x[2]; $('#fr-c').value = x[3]; $('#fr-f').value = x[4]; },
+  'free-confirm': () => {
+    const p = num($('#fr-p').value), c = num($('#fr-c').value), f = num($('#fr-f').value), k = num($('#fr-kcal').value) || calcKcal(p, c, f), name = $('#fr-name').value.trim();
+    if (!name) return toast('Dile qué has comido'); if (!k) return toast('Indica las kcal (aunque sea aproximado)');
+    pushEntry({ id: null, name, unit: 'racion', kcal: r1(k), p, c, f }, 1, $('#m-meal').value, true); save(); closeModal(); render(); toast('Comida libre registrada 🎉');
+  },
   tab: el => { S.tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
   day: el => { S.date = addDays(S.date, +el.dataset.n); render(); },
   today: () => { S.date = todayS(); render(); },
@@ -656,14 +694,14 @@ const A = {
   fav: el => { const f = db.foods.find(x => x.id === el.dataset.id); f.fav = !f.fav; save(); if (M) { const sc = $('#mlist').scrollTop; renderAdd(); $('#mlist').scrollTop = sc; } else render(); },
   'add-confirm': () => {
     const f = db.foods.find(x => x.id === M.selId), qty = f ? toNative(f, num($('#m-qty').value), $('#m-mode').value) : 0; if (!f || qty <= 0) return toast('Indica una cantidad');
-    f.used = Date.now(); pushEntry(f, qty, $('#m-meal').value); save(); closeModal(); render(); toast('Añadido ✔');
+    f.used = Date.now(); pushEntry(f, qty, $('#m-meal').value, $('#m-free').checked); save(); closeModal(); render(); toast('Añadido ✔');
   },
   'new-confirm': () => {
     const f = readForm(), qty = num($('#f-qty').value);
     if (!f.name) return toast('Ponle un nombre'); if (qty <= 0) return toast('Indica una cantidad'); if (!f.kcal) return toast('Introduce kcal o macros');
     let food = { id: uid(), fav: false, used: Date.now(), ...f };
     if ($('#f-save').checked) db.foods.push(food);
-    pushEntry(food, qty, $('#m-meal').value); save(); closeModal(); render(); toast('Añadido ✔');
+    pushEntry(food, qty, $('#m-meal').value, $('#f-free').checked); save(); closeModal(); render(); toast('Añadido ✔');
   },
   'del-entry': (el, ev) => {
     ev.stopPropagation(); const { id, where, date } = el.dataset;
@@ -673,18 +711,18 @@ const A = {
   'edit-entry': el => {
     const { id, where, date } = el.dataset, e = findEntry(id, where, date); if (!e) return;
     M = { target: where, date: date || S.date, meal: e.meal, editId: id };
-    openModal(`<div class="hd"><h2>${esc(e.name)}</h2><button class="icon" data-act="close">✕</button></div><div class="grid2"><div class="field"><label>${e.unit === '100g' ? 'Gramos' : 'Raciones'}</label><input type="number" inputmode="decimal" id="e-qty" value="${e.qty}" step="any"></div><div class="field"><label>Comida</label>${mealSelect('m-meal')}</div></div><button class="btn block" data-act="edit-save">Guardar</button>`);
+    openModal(`<div class="hd"><h2>${esc(e.name)}</h2><button class="icon" data-act="close">✕</button></div><div class="grid2"><div class="field"><label>${e.unit === '100g' ? 'Gramos' : 'Raciones'}</label><input type="number" inputmode="decimal" id="e-qty" value="${e.qty}" step="any"></div><div class="field"><label>Comida</label>${mealSelect('m-meal')}</div></div><label class="row" style="color:var(--text)"><input type="checkbox" id="e-free" style="width:auto" ${e.free ? 'checked' : ''}> 🎉 Comida libre (fuera de plan)</label><button class="btn block mt" data-act="edit-save">Guardar</button>`);
   },
   'edit-save': () => {
     const e = findEntry(M.editId, M.target, M.date), q = num($('#e-qty').value); if (!e || q <= 0) return toast('Cantidad no válida');
-    e.qty = q; e.meal = $('#m-meal').value; save(); closeModal(); render();
+    e.qty = q; e.meal = $('#m-meal').value; if ($('#e-free').checked) e.free = true; else delete e.free; save(); closeModal(); render();
   },
   'plan-reg': el => { regPlan(getPlan(S.date).find(e => e.id === el.dataset.id)); save(); render(); },
   'plan-reg-all': () => { getPlan(S.date).filter(e => !e.done).forEach(regPlan); save(); render(); toast('Plan registrado ✔'); },
   'plan-dup': el => { const d = el.dataset.date; db.plan[addDays(d, 1)] = [...getPlan(addDays(d, 1)), ...getPlan(d).map(e => ({ ...e, id: uid(), done: false }))]; save(); render(); toast('Duplicado al día siguiente'); },
   'plan-copy-prev': () => {
     const prev = addDays(S.planWeek, -7); let n = 0;
-    for (let i = 0; i < 7; i++) { const src = getPlan(addDays(prev, i)); if (src.length) { db.plan[addDays(S.planWeek, i)] = src.map(e => ({ ...e, id: uid(), done: false })); n++; } }
+    for (let i = 0; i < 7; i++) { const src = getPlan(addDays(prev, i)); if (src.length) { db.plan[addDays(S.planWeek, i)] = src.map(e => ({ ...e, id: uid(), done: false })); if (db.freeDays[addDays(prev, i)]) db.freeDays[addDays(S.planWeek, i)] = true; n++; } }
     save(); render(); toast(n ? 'Plan copiado ✔' : 'La semana anterior no tenía plan');
   },
   'plan-from-log': () => { copyLogToPlan(addDays(S.planWeek, -7), S.planWeek); },
@@ -754,7 +792,7 @@ function regPlan(e) {
 }
 function copyLogToPlan(fromMon, toMon) {
   let n = 0;
-  for (let i = 0; i < 7; i++) { const src = getDay(addDays(fromMon, i)).entries; if (src.length) { db.plan[addDays(toMon, i)] = src.map(e => ({ ...e, id: uid(), done: false })); n++; } }
+  for (let i = 0; i < 7; i++) { const src = getDay(addDays(fromMon, i)).entries; if (src.length) { db.plan[addDays(toMon, i)] = src.map(e => ({ ...e, id: uid(), done: false })); if (db.freeDays[addDays(fromMon, i)]) db.freeDays[addDays(toMon, i)] = true; n++; } }
   save(); render(); toast(n ? 'Plan creado ✔ Ajústalo a tu gusto' : 'No había comidas registradas en esa semana');
 }
 
