@@ -40,7 +40,7 @@ const BASE_FOODS = [
   ['Proteína whey (polvo)', 400, 80, 8, 6], ['Café con leche (taza ~200 ml semi)', 47, 3.3, 4.8, 1.6],
 ].map((a, i) => ({ id: 'base' + i, name: a[0], type: 'base', unit: '100g', kcal: a[1], p: a[2], c: a[3], f: a[4], fav: false, used: 0 }));
 
-const SPORTS = { caminar: ['🚶 Caminar', 3.5], correr: ['🏃 Correr', 9], bici: ['🚴 Bici', 7], natacion: ['🏊 Natación', 6], fuerza: ['🏋️ Fuerza / gimnasio', 4], eliptica: ['🌀 Elíptica', 5], yoga: ['🧘 Yoga / pilates', 2.5], baile: ['💃 Baile / zumba', 5], hiit: ['🔥 HIIT', 8], otro: ['⚡ Otro', 4] };
+const SPORTS = { caminar: ['🚶 Caminar', 3.5], correr: ['🏃 Correr', 9], bici: ['🚴 Bici', 7], natacion: ['🏊 Natación', 6], aquagym: ['💦 Aquagym', 5.5], fuerza: ['🏋️ Fuerza / gimnasio', 4], eliptica: ['🌀 Elíptica', 5], yoga: ['🧘 Yoga / pilates', 2.5], baile: ['💃 Baile / zumba', 5], hiit: ['🔥 HIIT', 8], otro: ['⚡ Otro', 4] };
 const WEEK_MIN_GOAL = 150; // recomendación general de actividad semanal (OMS)
 
 const DEF_PROFILE = { configured: false, sex: 'f', age: 35, height: 165, weight: 75, goalWeight: 0, activity: 1.375, goalKgWeek: 0.5, kcal: 1700, pP: 35, pC: 40, pF: 25, stepsGoal: 10000 };
