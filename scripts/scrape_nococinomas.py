@@ -61,6 +61,7 @@ for n, (pid, p) in enumerate(products.items(), 1):
     f = {k: num(v) for k, v in re.findall(r'(Energía \(Kcal\)|Hidratos \(g\)|Fibra \(g\)|Proteínas \(g\)|Grasas \(g\))\n([\d.,]+)', t)}
     title = re.search(r'<meta property="og:title" content="([^"]+)"', h)
     name = html.unescape(title.group(1)).strip() if title else ''
+    if re.search(r'familiar|\+\s*grandes?\b', name, re.I): continue  # formatos familiar y +grande: no los queremos
     price = re.search(r'"price":\s*"?([\d.]+)', h)
     if not (m and name and f.get('Energía (Kcal)') is not None and f.get('Proteínas (g)') is not None):
         continue

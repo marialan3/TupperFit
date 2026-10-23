@@ -498,7 +498,8 @@ async function openCatalog() {
   openModal('<div class="hd"><h2>🔎 Catálogo nococinomas</h2><button class="icon" data-act="close">✕</button></div><p class="empty">Cargando catálogo…</p>');
   try {
     const r = await fetch('data/nococinomas.json', { cache: 'no-store' }); if (!r.ok) throw 0;
-    const d = await r.json(); if (!C) return; C.data = d;
+    const d = await r.json(); if (!C) return;
+    d.items = d.items.filter(x => !/familiar|\+\s*grandes?\b/i.test(x.name)); d.count = d.items.length; C.data = d;
   } catch (e) { if (C) openModal('<div class="hd"><h2>🔎 Catálogo nococinomas</h2><button class="icon" data-act="close">✕</button></div><p>No se ha podido cargar el catálogo. Ábrela desde la dirección web publicada (no desde el archivo local) y con conexión a internet.</p>'); return; }
   renderCatalog();
 }
