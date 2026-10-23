@@ -145,6 +145,29 @@ function ring(pct, color, big, small) {
   const R = 62, C = 2 * Math.PI * R, v = Math.max(0, Math.min(1, pct));
   return `<div class="ring"><svg viewBox="0 0 150 150" width="150" height="150"><circle cx="75" cy="75" r="${R}" fill="none" stroke="var(--line)" stroke-width="14"/><circle cx="75" cy="75" r="${R}" fill="none" stroke="${color}" stroke-width="14" stroke-linecap="round" stroke-dasharray="${C * v} ${C}" transform="rotate(-90 75 75)"/></svg><div class="mid"><span class="big">${big}</span><span class="muted">${small}</span></div></div>`;
 }
+function donut(p, c, f) {
+  const R0 = 30, C = 2 * Math.PI * R0, k = [[p * 4, 'var(--p)'], [c * 4, 'var(--c)'], [f * 9, 'var(--f)']], tot = sum(k.map(x => x[0]));
+  let off = 0, segs = `<circle cx="40" cy="40" r="${R0}" fill="none" stroke="var(--line)" stroke-width="12"/>`;
+  if (tot) k.forEach(([v, col]) => { const len = C * v / tot; segs += `<circle cx="40" cy="40" r="${R0}" fill="none" stroke="${col}" stroke-width="12" stroke-dasharray="${len} ${C - len}" stroke-dashoffset="${-off}" transform="rotate(-90 40 40)"/>`; off += len; });
+  return `<svg viewBox="0 0 80 80" width="92" height="92" style="flex:none">${segs}<text x="40" y="38" text-anchor="middle" font-size="13" font-weight="700" fill="var(--text)">${r0(tot)}</text><text x="40" y="50" text-anchor="middle" font-size="8" fill="var(--muted)">kcal</text></svg>`;
+}
+// Resumen de un día con gráfico circular: ¿cubro mis macros y no me paso?
+function daySummary(tot, t) {
+  const off = tot.kcal - t.kcal, kc = tot.p * 4 + tot.c * 4 + tot.f * 9 || 1, pr = db.profile;
+  const st = !tot.kcal ? '' : Math.abs(off) <= t.kcal * 0.05 ? '<span class="tag">✅ en objetivo</span>' : off > 0 ? `<span class="tag bad">⚠️ te pasas ${r0(off)} kcal</span>` : `<span class="tag warn">faltan ${r0(-off)} kcal</span>`;
+  const warn = [];
+  if (tot.kcal && tot.p < t.p * 0.9) warn.push(`faltan ${r0(t.p - tot.p)} g de proteína`);
+  if (tot.f > t.f * 1.1) warn.push(`${r0(tot.f - t.f)} g de grasa de más`);
+  if (tot.c > t.c * 1.1) warn.push(`${r0(tot.c - t.c)} g de hidratos de más`);
+  return `<div class="row" style="gap:12px">${donut(tot.p, tot.c, tot.f)}<div class="grow"><div><b>${r0(tot.kcal)}</b> / ${r0(t.kcal)} kcal ${st}</div>
+    <div class="muted" style="font-size:.78rem;margin-bottom:5px">P ${r0(tot.p * 4 / kc * 100)}% · C ${r0(tot.c * 4 / kc * 100)}% · G ${r0(tot.f * 9 / kc * 100)}% (obj. ${pr.pP}/${pr.pC}/${pr.pF})</div>
+    ${macroRow('Proteínas', 'var(--p)', tot.p, t.p)}${macroRow('Hidratos', 'var(--c)', tot.c, t.c)}${macroRow('Grasas', 'var(--f)', tot.f, t.f)}</div></div>${warn.length ? `<div class="warnc" style="font-size:.82rem">⚠️ ${warn.join(' · ')}</div>` : ''}`;
+}
+// Cantidad real consumida: en gramos o en unidades/raciones (si conocemos el peso de una unidad).
+const modeOpts = f => f.unit === '100g' ? [['g', 'gramos'], ...(f.serv > 0 ? [['ud', `unidades (${r1(f.serv)} g)`]] : [])] : [['rac', 'raciones'], ...(f.serv > 0 ? [['g', `gramos (ración = ${r1(f.serv)} g)`]] : [])];
+const toNative = (f, v, mode) => f.unit === '100g' ? (mode === 'ud' ? v * f.serv : v) : (mode === 'g' && f.serv > 0 ? v / f.serv : v);
+const defMode = f => f.unit === '100g' ? (f.serv > 0 ? 'ud' : 'g') : 'rac';
+const defQty = (f, mode) => mode === 'g' ? 100 : 1;
 const macroRow = (label, color, v, t) => {
   const pct = t ? v / t * 100 : 0;
   return `<div class="macro"><div class="h"><span><span class="dot" style="background:${color}"></span>${label}</span><span><b>${r0(v)}</b> / ${r0(t)} g</span></div><div class="bar"><i style="width:${Math.min(100, pct)}%;background:${pct > 110 ? 'var(--bad)' : color}"></i></div></div>`;
@@ -153,13 +176,14 @@ const macroRow = (label, color, v, t) => {
 // ───────── estado de la interfaz ─────────
 const S = { tab: 'hoy', date: todayS(), planWeek: mondayOf(todayS()), weekStart: mondayOf(todayS()), q: '', filter: 'all' };
 let M = null; // estado de la ventana "añadir"
+let R = null; // estado del editor de platos con ingredientes
 
 function toast(msg) {
   const t = $('#toast'); t.textContent = msg; t.hidden = false;
   clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, 2600);
 }
 function openModal(html) { const m = $('#modal'); m.innerHTML = `<div class="sheet">${html}</div>`; m.hidden = false; }
-function closeModal() { $('#modal').hidden = true; $('#modal').innerHTML = ''; M = null; }
+function closeModal() { $('#modal').hidden = true; $('#modal').innerHTML = ''; M = null; R = null; }
 
 // ───────── vistas ─────────
 function render() {
@@ -224,13 +248,13 @@ function foodListHtml(selId) {
   return list.map(f => `<div class="food ${f.id === selId ? 'sel' : ''}" data-act="${M ? 'pick' : 'edit-food'}" data-id="${f.id}">
     <button class="star" data-act="fav" data-id="${f.id}" title="Favorito">${f.fav ? '⭐' : '☆'}</button>
     <div class="grow"><div class="n">${esc(f.name)} ${mismatch(f) ? '<span class="tag warn" title="Las kcal no cuadran con las macros">⚠️ revisar</span>' : ''}</div>
-    <div class="s muted">${TYPES[f.type] || ''} · ${f.unit === '100g' ? 'por 100 g' : 'por ración'} · P ${r1(f.p)} C ${r1(f.c)} G ${r1(f.f)}</div></div><b>${r0(f.kcal)}</b></div>`).join('');
+    <div class="s muted">${TYPES[f.type] || ''}${f.ingredients ? ` · ${f.ingredients.length} ingredientes` : ''} · ${f.unit === '100g' ? 'por 100 g' : 'por ración'} · P ${r1(f.p)} C ${r1(f.c)} G ${r1(f.f)}</div></div><b>${r0(f.kcal)}</b></div>`).join('');
 }
 const chipsHtml = () => `<div class="chips">${[['all', 'Todos'], ['fav', '⭐ Favoritos'], ['tupper', '🍱 Tuppers'], ['casero', '🍳 Caseros'], ['producto', '🏷️ Productos'], ['base', '🥦 Básicos']].map(([k, l]) => `<button class="chip ${S.filter === k ? 'on' : ''}" data-act="filter" data-k="${k}">${l}</button>`).join('')}</div>`;
 
 function viewAlimentos() {
   return `<div class="card"><h2>🍱 Mis alimentos y tuppers</h2><p class="muted">Guarda aquí tus platos favoritos con su información nutricional y añádelos a cualquier día con un toque.</p>
-    <div class="row wrap"><button class="btn" data-act="new-food">＋ Nuevo alimento</button><button class="btn sec" data-act="import">📋 Importar varios</button></div>
+    <div class="row wrap"><button class="btn" data-act="new-food">＋ Nuevo alimento</button><button class="btn sec" data-act="new-recipe">🍳 Plato con ingredientes</button><button class="btn sec" data-act="import">📋 Importar varios</button></div>
     <div class="field mt"><input type="search" id="q" placeholder="Buscar…" value="${esc(S.q)}"></div>${chipsHtml()}<div id="foodlist">${foodListHtml()}</div></div>`;
 }
 
@@ -240,10 +264,10 @@ function viewPlan() {
     <div class="row wrap" style="margin-bottom:10px"><button class="btn sm sec" data-act="plan-copy-prev">📋 Copiar plan de la semana anterior</button><button class="btn sm sec" data-act="plan-from-log">⏪ Usar lo que comí la semana anterior</button></div>`;
   const orders = {};
   for (let i = 0; i < 7; i++) {
-    const date = addDays(mon, i), es = getPlan(date), tot = totals(es), off = tot.kcal - t.kcal;
-    const cls = !es.length ? '' : Math.abs(off) <= t.kcal * 0.05 ? 'good' : off > 0 ? 'badc' : 'warnc';
-    h += `<div class="card pday ${date === today ? 'today' : ''}"><h3><span style="text-transform:capitalize">${fmtDate(date, { weekday: 'long', day: 'numeric' })}</span><span class="${cls}">${es.length ? `${r0(tot.kcal)} kcal · P ${r0(tot.p)}g` : ''}</span></h3>`;
-    if (!es.length) h += '<div class="empty">Sin planificar</div>';
+    const date = addDays(mon, i), es = getPlan(date), tot = totals(es);
+    
+    h += `<div class="card pday ${date === today ? 'today' : ''}"><h3><span style="text-transform:capitalize">${fmtDate(date, { weekday: 'long', day: 'numeric' })}</span></h3>`;
+    h += es.length ? `<div style="margin-bottom:6px">${daySummary(tot, t)}</div>` : '<div class="empty">Sin planificar</div>';
     MEALS.forEach(([key, name, ic]) => es.filter(e => e.meal === key).forEach(e => {
       const m = eM(e);
       if (db.foods.find(f => f.id === e.foodId)?.type === 'tupper') orders[e.name] = (orders[e.name] || 0) + e.qty;
@@ -327,7 +351,8 @@ function viewAjustes() {
     <button class="btn sm sec" data-act="use-sug">Usar la sugerida (${sug} kcal)</button>
     <div class="grid3 mt">${inp('pP', '% Proteínas')}${inp('pC', '% Hidratos')}${inp('pF', '% Grasas')}</div>
     <div class="preview ${tot !== 100 ? 'badc' : ''}">Suma: <b>${tot}%</b> ${tot !== 100 ? '⚠️ debe sumar 100%' : '✅'}<br>
-    Proteínas <b>${r0(t.p)} g</b> (${r1(t.p / wt)} g/kg) · Hidratos <b>${r0(t.c)} g</b> · Grasas <b>${r0(t.f)} g</b></div>
+    Proteínas <b>${r0(t.p)} g</b> · Hidratos <b>${r0(t.c)} g</b> · Grasas <b>${r0(t.f)} g</b></div>
+    <div class="preview muted">📐 Así se calcula: ${p.pP}% de ${r0(p.kcal)} kcal = ${r0(p.kcal * p.pP / 100)} kcal ÷ 4 kcal/g = <b>${r0(t.p)} g de proteína</b>. Hidratos igual (÷ 4) y grasas ÷ 9.<br>Proteína por kg: ${r0(t.p)} g ÷ ${r1(wt)} kg (tu último peso) = <b>${r1(t.p / wt)} g/kg</b> ${t.p / wt < 1.2 ? '<span class="warnc">· bajo para un déficit: sube el % de proteínas</span>' : ''}</div>
     <p class="muted">Las calorías se calculan con 4 kcal/g de proteínas e hidratos y 9 kcal/g de grasas. Con déficit se suele recomendar 1,6–2,2 g de proteína por kg.</p></div>
 
   <div class="card"><h2>💾 Copia de seguridad</h2><p class="muted">Tus datos viven solo en este dispositivo. Para pasarlos al móvil (o guardarlos), exporta un archivo e impórtalo en el otro dispositivo.</p>
@@ -348,16 +373,17 @@ const mealSelect = id => `<select id="${id}">${MEALS.map(([k, n]) => `<option va
 function renderAdd() {
   const title = M.target === 'plan' ? `Planificar · ${fmtDate(M.date, { weekday: 'long', day: 'numeric' })}` : 'Añadir comida';
   let h = `<div class="hd"><h2>${title}</h2><button class="icon" data-act="close">✕</button></div>
-    <div class="seg"><button class="${M.tab === 'lib' ? 'on' : ''}" data-act="mtab" data-k="lib">Mis alimentos</button><button class="${M.tab === 'new' ? 'on' : ''}" data-act="mtab" data-k="new">Nuevo / calculadora</button></div>`;
+    <div class="seg"><button class="${M.tab === 'lib' ? 'on' : ''}" data-act="mtab" data-k="lib">Mis alimentos</button><button class="${M.tab === 'new' ? 'on' : ''}" data-act="mtab" data-k="new">Nuevo / calculadora</button><button data-act="recipe-from-add">🍳 Receta</button></div><div id="m-day" class="preview"></div>`;
   if (M.tab === 'lib') {
     const f = db.foods.find(x => x.id === M.selId);
     h += `<div class="field"><input type="search" id="mq" placeholder="Buscar…" value="${esc(S.q)}"></div>${chipsHtml()}<div id="mlist" style="max-height:34vh;overflow-y:auto">${foodListHtml(M.selId)}</div>`;
     if (f) {
-      h += `<div class="card" style="margin-top:10px"><b>${esc(f.name)}</b><div class="grid2 mt"><div class="field"><label>${f.unit === '100g' ? 'Cantidad (gramos)' : 'Raciones'}</label><input type="number" inputmode="decimal" id="m-qty" data-live="lib" value="${M.qty}" step="any"></div><div class="field"><label>Comida</label>${mealSelect('m-meal')}</div></div><div id="m-prev" class="preview"></div><button class="btn block" data-act="add-confirm">Añadir</button></div>`;
+      h += `<div class="card" style="margin-top:10px"><b>${esc(f.name)}</b><div class="field mt"><label>${f.unit === '100g' ? 'Los valores son por 100 g: indica el peso real que has comido' : '¿Cuánto has comido?'}</label><div class="row"><input type="number" inputmode="decimal" id="m-qty" data-live="lib" value="${M.qty}" step="any"><select id="m-mode" data-live="lib" style="width:auto">${modeOpts(f).map(([k, l]) => `<option value="${k}" ${M.mode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div><div class="field"><label>Comida</label>${mealSelect('m-meal')}</div>${f.ingredients ? `<div class="muted" style="font-size:.8rem">🍳 Plato completo (${r1(f.servings)} ${f.servings === 1 ? 'ración' : 'raciones'}): ${f.ingredients.map(i => `${esc(i.name)} ${r1(i.qty)}${i.unit === '100g' ? ' g' : ' rac.'}`).join(' · ')}</div>` : ''}<div id="m-prev" class="preview"></div><button class="btn block" data-act="add-confirm">Añadir</button></div>`;
     }
   } else h += foodForm({ name: '', type: 'producto', unit: '100g', kcal: '', p: '', c: '', f: '' }, true);
   openModal(h);
   if (M.tab === 'lib') updatePreview(); else updateFormPreview();
+  if (!$('#m-prev')) updDay(null);
 }
 
 function foodForm(f, withQty) {
@@ -367,6 +393,8 @@ function foodForm(f, withQty) {
   <div class="field"><label>Los valores son…</label><select id="f-unit" data-live="form"><option value="100g" ${f.unit === '100g' ? 'selected' : ''}>por 100 g</option><option value="racion" ${f.unit === 'racion' ? 'selected' : ''}>por ración / tupper</option></select></div></div>
   <div class="grid4"><div class="field"><label>kcal</label><input type="number" inputmode="decimal" id="f-kcal" data-live="form" value="${f.kcal}" step="any"></div><div class="field"><label>Prot. (g)</label><input type="number" inputmode="decimal" id="f-p" data-live="form" value="${f.p}" step="any"></div><div class="field"><label>Hidr. (g)</label><input type="number" inputmode="decimal" id="f-c" data-live="form" value="${f.c}" step="any"></div><div class="field"><label>Grasas (g)</label><input type="number" inputmode="decimal" id="f-f" data-live="form" value="${f.f}" step="any"></div></div>
   <div id="f-check" class="muted"></div>
+  <div class="field"><label>Peso de 1 unidad o ración (g) — opcional</label><input type="number" inputmode="decimal" id="f-serv" value="${f.serv || ''}" step="any" placeholder="p. ej. 120 (un plátano) o 350 (un tupper)"></div>
+  <p class="muted" style="margin-top:-4px">Con este dato podrás añadirlo luego por unidades o por gramos reales.</p>
   ${withQty ? `<div class="grid2 mt"><div class="field"><label id="f-qtylbl">Cantidad</label><input type="number" inputmode="decimal" id="f-qty" data-live="form" value="${f.unit === 'racion' ? 1 : 100}" step="any"></div><div class="field"><label>Comida</label>${mealSelect('m-meal')}</div></div><div id="m-prev" class="preview"></div>
   <label class="row" style="color:var(--text)"><input type="checkbox" id="f-save" style="width:auto" checked> Guardar en mis alimentos</label>
   <button class="btn block mt" data-act="new-confirm">Añadir a ${M.target === 'plan' ? 'plan' : 'hoy'}</button>` : `<label class="row" style="color:var(--text)"><input type="checkbox" id="f-fav" style="width:auto" ${f.fav ? 'checked' : ''}> ⭐ Favorito</label>`}`;
@@ -374,7 +402,7 @@ function foodForm(f, withQty) {
 function readForm() {
   const p = num($('#f-p').value), c = num($('#f-c').value), f = num($('#f-f').value);
   let kcal = num($('#f-kcal').value); if (!kcal) kcal = calcKcal(p, c, f);
-  return { name: $('#f-name').value.trim(), type: $('#f-type').value, unit: $('#f-unit').value, kcal: r1(kcal), p, c, f };
+  return { name: $('#f-name').value.trim(), type: $('#f-type').value, unit: $('#f-unit').value, kcal: r1(kcal), p, c, f, serv: num($('#f-serv').value) || 0 };
 }
 function updateFormPreview() {
   const f = readForm(), k = calcKcal(f.p, f.c, f.f), chk = $('#f-check');
@@ -383,16 +411,62 @@ function updateFormPreview() {
   const lbl = $('#f-qtylbl'); if (lbl) lbl.textContent = f.unit === '100g' ? 'Cantidad (gramos)' : 'Raciones';
   const m = scale(f, f.unit, num(q.value));
   $('#m-prev').innerHTML = `<b>${r0(m.kcal)} kcal</b> · P ${r1(m.p)} g · C ${r1(m.c)} g · G ${r1(m.f)} g`;
+  updDay(m);
 }
 function updatePreview() {
-  const f = db.foods.find(x => x.id === M.selId), q = $('#m-qty'); if (!f || !q) return;
-  const m = scale(f, f.unit, num(q.value));
+  const f = db.foods.find(x => x.id === M.selId), q = $('#m-qty'); if (!f || !q) return updDay(null);
+  const m = scale(f, f.unit, toNative(f, num(q.value), $('#m-mode').value));
   $('#m-prev').innerHTML = `<b>${r0(m.kcal)} kcal</b> · P ${r1(m.p)} g · C ${r1(m.c)} g · G ${r1(m.f)} g`;
+  updDay(m);
+}
+// Cómo queda el día con lo que estás a punto de añadir
+function updDay(m) {
+  const el = $('#m-day'); if (!el) return;
+  const b = totals(M.target === 'plan' ? getPlan(M.date) : getDay(M.date).entries), t = targets(), x = { kcal: b.kcal + (m?.kcal || 0), p: b.p + (m?.p || 0), c: b.c + (m?.c || 0), f: b.f + (m?.f || 0) };
+  const cl = (v, tg) => v > tg * 1.05 ? 'badc' : 'good';
+  el.innerHTML = `<div class="muted" style="font-size:.75rem">${m ? 'El día quedaría así' : 'Llevas en este día'}</div><b class="${cl(x.kcal, t.kcal)}">${r0(x.kcal)}</b> / ${r0(t.kcal)} kcal · <span class="${cl(x.p, t.p)}">P ${r0(x.p)}/${r0(t.p)}</span> · <span class="${cl(x.c, t.c)}">C ${r0(x.c)}/${r0(t.c)}</span> · <span class="${cl(x.f, t.f)}">G ${r0(x.f)}/${r0(t.f)}</span>`;
 }
 
 function pushEntry(f, qty, meal) {
   const e = { id: uid(), meal, name: f.name, qty, unit: f.unit, base: { kcal: f.kcal, p: f.p, c: f.c, f: f.f }, foodId: f.id };
   if (M.target === 'plan') getPlan(M.date, true).push(e); else getDay(M.date, true).entries.push(e);
+}
+
+// ───────── editor de platos con ingredientes ─────────
+function openRecipe(f, ctx) {
+  R = f ? { id: f.id, name: f.name, servings: f.servings || 1, fav: f.fav, serv: f.serv || 0, ing: f.ingredients.map(i => ({ ...i, base: { ...i.base } })) } : { id: null, name: '', servings: 1, fav: false, serv: 0, ing: [] };
+  R.ctx = ctx || null; renderRecipe();
+}
+const ingUnit = i => i.unit === '100g' ? 'g' : 'rac.';
+const ingLine = i => { const m = scale(i.base, i.unit, i.qty); return `${r0(m.kcal)} kcal · P ${r1(m.p)} · C ${r1(m.c)} · G ${r1(m.f)}`; };
+function recipeListHtml() {
+  const q = ($('#rq')?.value || '').trim().toLowerCase();
+  const l = db.foods.filter(f => !f.ingredients && (!q || f.name.toLowerCase().includes(q))).sort((a, b) => (b.fav - a.fav) || ((b.used || 0) - (a.used || 0)) || a.name.localeCompare(b.name)).slice(0, 25);
+  return l.length ? l.map(f => `<div class="food" data-act="r-pick" data-id="${f.id}"><div class="grow"><div class="n">${esc(f.name)}</div><div class="s muted">${f.unit === '100g' ? 'por 100 g' : 'por ración'} · P ${r1(f.p)} C ${r1(f.c)} G ${r1(f.f)}</div></div><b>${r0(f.kcal)}</b></div>`).join('') : '<p class="empty">Sin resultados. Usa "Ingrediente manual".</p>';
+}
+function renderRecipe() {
+  const keep = $('.sheet')?.scrollTop || 0;
+  const mi = (id, ph) => `<input type="number" inputmode="decimal" id="${id}" step="any" placeholder="${ph}">`;
+  openModal(`<div class="hd"><h2>🍳 ${R.id ? 'Editar plato' : 'Plato con ingredientes'}</h2><button class="icon" data-act="close">✕</button></div>
+    <p class="muted">Monta el plato con sus ingredientes y cantidades: las macros se suman solas.</p>
+    <div class="field"><label>Nombre del plato</label><input type="text" data-r="name" value="${esc(R.name)}" placeholder="p. ej. Tortitas de avena y claras"></div>
+    <h3>Ingredientes</h3>
+    ${R.ing.length ? R.ing.map((i, k) => `<div class="entry"><div class="grow"><div class="n">${esc(i.name)}</div><div class="s" id="ri-m-${k}">${ingLine(i)}</div></div><input type="number" inputmode="decimal" step="any" data-ri="1" data-i="${k}" value="${i.qty}" style="width:84px"><span class="muted">${ingUnit(i)}</span><button class="icon" data-act="r-del" data-i="${k}">🗑️</button></div>`).join('') : '<p class="empty">Aún no has añadido ingredientes.</p>'}
+    <div class="field mt"><label>Añadir ingrediente de tus alimentos</label><input type="search" id="rq" placeholder="Buscar: claras, avena, aceite…"></div>
+    <div id="rlist" style="max-height:24vh;overflow-y:auto">${recipeListHtml()}</div>
+    <details class="mt"><summary class="muted">＋ Ingrediente manual (por 100 g)</summary><div class="field mt"><input type="text" id="rm-name" placeholder="Nombre (p. ej. Harina de avena)"></div>
+      <div class="grid4"><div class="field"><label>kcal</label>${mi('rm-kcal', '')}</div><div class="field"><label>Prot.</label>${mi('rm-p', '')}</div><div class="field"><label>Hidr.</label>${mi('rm-c', '')}</div><div class="field"><label>Grasas</label>${mi('rm-f', '')}</div></div>
+      <div class="field"><label>Gramos que lleva el plato</label>${mi('rm-g', '100')}</div><button class="btn sm sec" data-act="r-manual">Añadir ingrediente</button></details>
+    <div class="field mt"><label>¿Cuántas raciones salen de este plato?</label><input type="number" inputmode="decimal" step="any" data-r="servings" value="${R.servings}"></div>
+    <div class="field"><label>Peso de 1 ración (g) — opcional</label><input type="number" inputmode="decimal" step="any" data-r="serv" value="${R.serv || ''}" placeholder="para añadirlo por gramos"></div>
+    <div id="r-tot" class="preview"></div>
+    <div class="row"><button class="btn grow" data-act="r-save">Guardar plato</button>${R.id ? '<button class="btn danger" data-act="food-del-r">Eliminar</button>' : ''}</div>`);
+  updateRTot(); $('.sheet').scrollTop = keep;
+}
+function updateRTot() {
+  const t = totals(R.ing), s = R.servings > 0 ? R.servings : 1, el = $('#r-tot'); if (!el) return;
+  el.innerHTML = R.ing.length ? `<b>Plato completo:</b> ${r0(t.kcal)} kcal · P ${r1(t.p)} · C ${r1(t.c)} · G ${r1(t.f)}<br><b>Por ración (÷ ${r1(s)}):</b> <b>${r0(t.kcal / s)} kcal</b> · P ${r1(t.p / s)} g · C ${r1(t.c / s)} g · G ${r1(t.f / s)} g` : 'Añade ingredientes para ver el total.';
+  R.ing.forEach((i, k) => { const e = $(`#ri-m-${k}`); if (e) e.textContent = ingLine(i); });
 }
 
 // ───────── acciones ─────────
@@ -408,10 +482,10 @@ const A = {
   add: el => openAdd({ target: el.dataset.target, date: el.dataset.date || S.date, meal: el.dataset.meal }),
   mtab: el => { M.tab = el.dataset.k; renderAdd(); },
   filter: el => { S.filter = el.dataset.k; if (M) renderAdd(); else render(); },
-  pick: el => { M.selId = el.dataset.id; const f = db.foods.find(x => x.id === M.selId); M.qty = f.unit === '100g' ? 100 : 1; renderAdd(); },
+  pick: el => { M.selId = el.dataset.id; const f = db.foods.find(x => x.id === M.selId); M.mode = defMode(f); M.qty = defQty(f, M.mode); renderAdd(); },
   fav: el => { const f = db.foods.find(x => x.id === el.dataset.id); f.fav = !f.fav; save(); if (M) { const sc = $('#mlist').scrollTop; renderAdd(); $('#mlist').scrollTop = sc; } else render(); },
   'add-confirm': () => {
-    const f = db.foods.find(x => x.id === M.selId), qty = num($('#m-qty').value); if (!f || qty <= 0) return toast('Indica una cantidad');
+    const f = db.foods.find(x => x.id === M.selId), qty = f ? toNative(f, num($('#m-qty').value), $('#m-mode').value) : 0; if (!f || qty <= 0) return toast('Indica una cantidad');
     f.used = Date.now(); pushEntry(f, qty, $('#m-meal').value); save(); closeModal(); render(); toast('Añadido ✔');
   },
   'new-confirm': () => {
@@ -445,9 +519,28 @@ const A = {
   },
   'plan-from-log': () => { copyLogToPlan(addDays(S.planWeek, -7), S.planWeek); },
   'plan-next-from-week': () => { const next = addDays(S.weekStart, 7); copyLogToPlan(S.weekStart, next); S.planWeek = next; S.tab = 'plan'; render(); },
+  'new-recipe': () => { M = null; openRecipe(null, null); },
+  'recipe-from-add': () => { const c = { target: M.target, date: M.date, meal: M.meal }; openRecipe(null, c); },
+  'r-pick': el => { const f = db.foods.find(x => x.id === el.dataset.id); R.ing.push({ id: uid(), name: f.name, unit: f.unit, qty: f.unit === '100g' ? 100 : 1, base: { kcal: f.kcal, p: f.p, c: f.c, f: f.f } }); renderRecipe(); },
+  'r-del': el => { R.ing.splice(+el.dataset.i, 1); renderRecipe(); },
+  'r-manual': () => {
+    const name = $('#rm-name').value.trim(), p = num($('#rm-p').value), c = num($('#rm-c').value), f = num($('#rm-f').value); let k = num($('#rm-kcal').value) || calcKcal(p, c, f);
+    if (!name) return toast('Ponle nombre al ingrediente'); if (!k) return toast('Indica kcal o macros');
+    R.ing.push({ id: uid(), name, unit: '100g', qty: num($('#rm-g').value) || 100, base: { kcal: r1(k), p, c, f } }); renderRecipe();
+  },
+  'r-save': () => {
+    const s = R.servings > 0 ? R.servings : 0; if (!R.name.trim()) return toast('Ponle un nombre al plato'); if (!R.ing.length) return toast('Añade algún ingrediente'); if (!s) return toast('Indica cuántas raciones salen');
+    const t = totals(R.ing), v = { name: R.name.trim(), type: 'casero', unit: 'racion', kcal: r1(t.kcal / s), p: r1(t.p / s), c: r1(t.c / s), f: r1(t.f / s), serv: R.serv || 0, servings: s, ingredients: R.ing.map(({ id, name, unit, qty, base }) => ({ id, name, unit, qty, base })) };
+    let food = R.id && db.foods.find(x => x.id === R.id);
+    if (food) Object.assign(food, v); else { food = { id: uid(), fav: false, used: 0, ...v }; db.foods.push(food); }
+    save(); const ctx = R.ctx; R = null;
+    if (ctx) { M = { ...ctx, tab: 'lib', selId: food.id, mode: 'rac', qty: 1 }; renderAdd(); } else { closeModal(); render(); }
+    toast('Plato guardado ✔');
+  },
+  'food-del-r': () => { if (confirm('¿Eliminar este plato? Los días ya registrados no cambian.')) { db.foods = db.foods.filter(x => x.id !== R.id); save(); closeModal(); render(); } },
   'new-food': () => { M = null; openModal(`<div class="hd"><h2>Nuevo alimento</h2><button class="icon" data-act="close">✕</button></div>${foodForm({ name: '', type: 'tupper', unit: 'racion', kcal: '', p: '', c: '', f: '' }, false)}<button class="btn block mt" data-act="food-save">Guardar</button>`); updateFormPreview(); },
   'edit-food': el => {
-    const f = db.foods.find(x => x.id === el.dataset.id); M = { foodId: f.id };
+    const f = db.foods.find(x => x.id === el.dataset.id); if (f.ingredients) { M = null; return openRecipe(f, null); } M = { foodId: f.id };
     openModal(`<div class="hd"><h2>Editar alimento</h2><button class="icon" data-act="close">✕</button></div>${foodForm(f, false)}<div class="row mt"><button class="btn grow" data-act="food-save">Guardar</button><button class="btn danger" data-act="food-del">Eliminar</button></div>`); updateFormPreview();
   },
   'food-save': () => {
@@ -497,8 +590,11 @@ document.addEventListener('input', ev => {
   const t = ev.target;
   if (t.id === 'q') { S.q = t.value; $('#foodlist').innerHTML = foodListHtml(); }
   else if (t.id === 'mq') { S.q = t.value; $('#mlist').innerHTML = foodListHtml(M.selId); }
-  else if (t.dataset.live === 'lib') { M.qty = num(t.value); updatePreview(); }
+  else if (t.dataset.live === 'lib') { M.qty = num($('#m-qty').value); M.mode = $('#m-mode').value; updatePreview(); }
   else if (t.dataset.live === 'form') updateFormPreview();
+  else if (t.dataset.r) { R[t.dataset.r] = t.dataset.r === 'name' ? t.value : num(t.value); updateRTot(); }
+  else if (t.dataset.ri) { R.ing[+t.dataset.i].qty = num(t.value); updateRTot(); }
+  else if (t.id === 'rq') $('#rlist').innerHTML = recipeListHtml();
 });
 document.addEventListener('change', ev => {
   const t = ev.target;
