@@ -481,7 +481,7 @@ function renderAdd() {
     const f = db.foods.find(x => x.id === M.selId);
     h += `<div class="field"><input type="search" id="mq" placeholder="Buscar…" value="${esc(S.q)}"></div>${chipsHtml()}<div id="mlist" style="max-height:34vh;overflow-y:auto">${foodListHtml(M.selId)}</div>`;
     if (f) {
-      h += `<div class="card" style="margin-top:10px"><b>${esc(f.name)}</b><div class="field mt"><label>${f.unit === '100g' ? 'Los valores son por 100 g: indica el peso real que has comido' : '¿Cuánto has comido?'}</label><div class="row"><input type="number" inputmode="decimal" id="m-qty" data-live="lib" value="${M.qty}" step="any"><select id="m-mode" data-live="lib" style="width:auto">${modeOpts(f).map(([k, l]) => `<option value="${k}" ${M.mode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div><div class="field"><label>Comida</label>${mealSelect('m-meal')}</div>${f.ingredients ? `<div class="muted" style="font-size:.8rem">🍳 Plato completo (${r1(f.servings)} ${f.servings === 1 ? 'ración' : 'raciones'}): ${f.ingredients.map(i => `${esc(i.name)} ${r1(i.qty)}${i.unit === '100g' ? ' g' : ' rac.'}`).join(' · ')}</div>` : ''}<label class="row" style="color:var(--text)"><input type="checkbox" id="m-free" style="width:auto"> 🎉 Comida libre (fuera de plan)</label><div id="m-prev" class="preview"></div><button class="btn block" data-act="add-confirm">Añadir</button></div>`;
+      h += `<div class="card" style="margin-top:10px"><b>${esc(f.name)}</b><div class="field mt"><label>${f.unit === '100g' ? 'Los valores son por 100 g: indica el peso real que has comido' : '¿Cuánto has comido?'}</label><div class="row"><input type="number" inputmode="decimal" id="m-qty" data-live="lib" value="${M.qty}" step="any"><select id="m-mode" data-live="lib" style="width:auto">${modeOpts(f).map(([k, l]) => `<option value="${k}" ${M.mode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div><div class="field"><label>Comida</label>${mealSelect('m-meal')}</div>${f.ingredients ? `<div class="muted" style="font-size:.8rem">🍳 Plato completo (${r1(f.servings)} ${f.servings === 1 ? 'ración' : 'raciones'}): ${f.ingredients.map(i => `${esc(i.name)} ${ingQty(i)}`).join(' · ')}</div>` : ''}<label class="row" style="color:var(--text)"><input type="checkbox" id="m-free" style="width:auto"> 🎉 Comida libre (fuera de plan)</label><div id="m-prev" class="preview"></div><button class="btn block" data-act="add-confirm">Añadir</button></div>`;
     }
   } else if (M.tab === 'free') h += freeForm();
   else h += foodForm(M.pre || { name: '', type: 'producto', unit: '100g', kcal: '', p: '', c: '', f: '' }, true);
@@ -548,10 +548,13 @@ function pushEntry(f, qty, meal, free) {
 
 // ───────── editor de platos con ingredientes ─────────
 function openRecipe(f, ctx) {
-  R = f ? { id: f.id, name: f.name, servings: f.servings || 1, fav: f.fav, serv: f.serv || 0, ing: f.ingredients.map(i => ({ ...i, base: { ...i.base } })) } : { id: null, name: '', servings: 1, fav: false, serv: 0, ing: [] };
+  R = f ? { id: f.id, name: f.name, servings: f.servings || 1, fav: f.fav, serv: f.serv || 0, ing: f.ingredients.map(i => ingNorm({ ...i, base: { ...i.base } })) } : { id: null, name: '', servings: 1, fav: false, serv: 0, ing: [] };
   R.ctx = ctx || null; renderRecipe();
 }
-const ingUnit = i => i.unit === '100g' ? 'g' : 'rac.';
+// Un ingrediente guarda la cantidad real (qty: gramos o raciones del alimento) y cómo la quieres ver (mode/disp: gramos, unidades o raciones).
+const ingNorm = i => { if (!i.mode) { i.mode = i.unit === '100g' ? 'g' : 'rac'; i.disp = i.qty; } i.serv = i.serv || 0; return i; };
+const fromNative = (f, q, mode) => f.unit === '100g' ? (mode === 'ud' && f.serv > 0 ? q / f.serv : q) : (mode === 'g' && f.serv > 0 ? q * f.serv : q);
+const ingQty = i => { ingNorm(i); return `${r1(i.disp)} ${i.mode === 'ud' ? (i.disp === 1 ? 'unidad' : 'unidades') : i.mode === 'g' ? 'g' : (i.disp === 1 ? 'ración' : 'raciones')}`; };
 const ingLine = i => { const m = scale(i.base, i.unit, i.qty); return `${r0(m.kcal)} kcal · P ${r1(m.p)} · C ${r1(m.c)} · G ${r1(m.f)}`; };
 function recipeListHtml() {
   const q = ($('#rq')?.value || '').trim().toLowerCase();
@@ -565,12 +568,12 @@ function renderRecipe() {
     <p class="muted">Monta el plato con sus ingredientes y cantidades: las macros se suman solas.</p>
     <div class="field"><label>Nombre del plato</label><input type="text" data-r="name" value="${esc(R.name)}" placeholder="p. ej. Tortitas de avena y claras"></div>
     <h3>Ingredientes</h3>
-    ${R.ing.length ? R.ing.map((i, k) => `<div class="entry"><div class="grow"><div class="n">${esc(i.name)}</div><div class="s" id="ri-m-${k}">${ingLine(i)}</div></div><input type="number" inputmode="decimal" step="any" data-ri="1" data-i="${k}" value="${i.qty}" style="width:84px"><span class="muted">${ingUnit(i)}</span><button class="icon" data-act="r-del" data-i="${k}">🗑️</button></div>`).join('') : '<p class="empty">Aún no has añadido ingredientes.</p>'}
+    ${R.ing.length ? R.ing.map((i, k) => `<div class="entry"><div class="grow"><div class="n">${esc(i.name)}</div><div class="s" id="ri-m-${k}">${ingLine(i)}</div></div><input type="number" inputmode="decimal" step="any" data-ri="1" data-i="${k}" value="${r1(ingNorm(i).disp)}" style="width:76px"><select data-rm="1" data-i="${k}" style="width:auto;max-width:120px">${modeOpts(i).map(([m, l]) => `<option value="${m}" ${i.mode === m ? 'selected' : ''}>${l}</option>`).join('')}</select><button class="icon" data-act="r-del" data-i="${k}">🗑️</button></div>`).join('') : '<p class="empty">Aún no has añadido ingredientes.</p>'}
     <div class="field mt"><label>Añadir ingrediente de tus alimentos</label><input type="search" id="rq" placeholder="Buscar: claras, avena, aceite…"></div>
     <div id="rlist" style="max-height:24vh;overflow-y:auto">${recipeListHtml()}</div>
     <details class="mt"><summary class="muted">＋ Ingrediente manual (por 100 g)</summary><div class="field mt"><input type="text" id="rm-name" placeholder="Nombre (p. ej. Harina de avena)"></div>
       <div class="grid4"><div class="field"><label>kcal</label>${mi('rm-kcal', '')}</div><div class="field"><label>Prot.</label>${mi('rm-p', '')}</div><div class="field"><label>Hidr.</label>${mi('rm-c', '')}</div><div class="field"><label>Grasas</label>${mi('rm-f', '')}</div></div>
-      <div class="field"><label>Gramos que lleva el plato</label>${mi('rm-g', '100')}</div><button class="btn sm sec" data-act="r-manual">Añadir ingrediente</button></details>
+      <div class="field"><label>Gramos que lleva el plato</label>${mi('rm-g', '100')}</div><div class="field"><label>Peso de 1 unidad (g) — opcional, para contarlo en unidades</label>${mi('rm-serv', 'p. ej. 60 un huevo')}</div><button class="btn sm sec" data-act="r-manual">Añadir ingrediente</button></details>
     <div class="field mt"><label>¿Cuántas raciones salen de este plato?</label><input type="number" inputmode="decimal" step="any" data-r="servings" value="${R.servings}"></div>
     <div class="field"><label>Peso de 1 ración (g) — opcional</label><input type="number" inputmode="decimal" step="any" data-r="serv" value="${R.serv || ''}" placeholder="para añadirlo por gramos"></div>
     <div id="r-tot" class="preview"></div>
@@ -735,16 +738,16 @@ const A = {
   'plan-next-from-week': () => { const next = addDays(S.weekStart, 7); copyLogToPlan(S.weekStart, next); S.planWeek = next; S.tab = 'plan'; render(); },
   'new-recipe': () => { M = null; openRecipe(null, null); },
   'recipe-from-add': () => { const c = { target: M.target, date: M.date, meal: M.meal }; openRecipe(null, c); },
-  'r-pick': el => { const f = db.foods.find(x => x.id === el.dataset.id); R.ing.push({ id: uid(), name: f.name, unit: f.unit, qty: f.unit === '100g' ? 100 : 1, base: { kcal: f.kcal, p: f.p, c: f.c, f: f.f } }); renderRecipe(); },
+  'r-pick': el => { const f = db.foods.find(x => x.id === el.dataset.id); const ing = { id: uid(), name: f.name, unit: f.unit, serv: f.serv || 0, base: { kcal: f.kcal, p: f.p, c: f.c, f: f.f } }; ing.mode = defMode(ing); ing.disp = defQty(ing, ing.mode); ing.qty = toNative(ing, ing.disp, ing.mode); R.ing.push(ing); renderRecipe(); },
   'r-del': el => { R.ing.splice(+el.dataset.i, 1); renderRecipe(); },
   'r-manual': () => {
     const name = $('#rm-name').value.trim(), p = num($('#rm-p').value), c = num($('#rm-c').value), f = num($('#rm-f').value); let k = num($('#rm-kcal').value) || calcKcal(p, c, f);
     if (!name) return toast('Ponle nombre al ingrediente'); if (!k) return toast('Indica kcal o macros');
-    R.ing.push({ id: uid(), name, unit: '100g', qty: num($('#rm-g').value) || 100, base: { kcal: r1(k), p, c, f } }); renderRecipe();
+    const g = num($('#rm-g').value) || 100; R.ing.push({ id: uid(), name, unit: '100g', serv: num($('#rm-serv').value) || 0, qty: g, mode: 'g', disp: g, base: { kcal: r1(k), p, c, f } }); renderRecipe();
   },
   'r-save': () => {
     const s = R.servings > 0 ? R.servings : 0; if (!R.name.trim()) return toast('Ponle un nombre al plato'); if (!R.ing.length) return toast('Añade algún ingrediente'); if (!s) return toast('Indica cuántas raciones salen');
-    const t = totals(R.ing), v = { name: R.name.trim(), type: 'casero', unit: 'racion', kcal: r1(t.kcal / s), p: r1(t.p / s), c: r1(t.c / s), f: r1(t.f / s), serv: R.serv || 0, servings: s, ingredients: R.ing.map(({ id, name, unit, qty, base }) => ({ id, name, unit, qty, base })) };
+    const t = totals(R.ing), v = { name: R.name.trim(), type: 'casero', unit: 'racion', kcal: r1(t.kcal / s), p: r1(t.p / s), c: r1(t.c / s), f: r1(t.f / s), serv: R.serv || 0, servings: s, ingredients: R.ing.map(({ id, name, unit, qty, base, serv, mode, disp }) => ({ id, name, unit, qty, base, serv, mode, disp })) };
     let food = R.id && db.foods.find(x => x.id === R.id);
     if (food) Object.assign(food, v); else { food = { id: uid(), fav: false, used: 0, ...v }; db.foods.push(food); }
     save(); const ctx = R.ctx; R = null;
@@ -817,7 +820,8 @@ document.addEventListener('input', ev => {
   else if (t.dataset.live === 'work') updateWork();
   else if (t.dataset.c && C) { C[t.dataset.c] = t.value; $('#clist').innerHTML = catListHtml(); }
   else if (t.dataset.r) { R[t.dataset.r] = t.dataset.r === 'name' ? t.value : num(t.value); updateRTot(); }
-  else if (t.dataset.ri) { R.ing[+t.dataset.i].qty = num(t.value); updateRTot(); }
+  else if (t.dataset.ri) { const g = R.ing[+t.dataset.i]; g.disp = num(t.value); g.qty = toNative(g, g.disp, g.mode); updateRTot(); }
+  else if (t.dataset.rm) { const g = R.ing[+t.dataset.i], row = t.closest('.entry'); g.mode = t.value; g.disp = r1(fromNative(g, g.qty, g.mode)); row.querySelector('[data-ri]').value = g.disp; updateRTot(); }
   else if (t.id === 'rq') $('#rlist').innerHTML = recipeListHtml();
 });
 document.addEventListener('change', ev => {
