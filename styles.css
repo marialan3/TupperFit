@@ -144,3 +144,9 @@ textarea { min-height: 110px; }
 .mic { width: 84px; height: 84px; border-radius: 50%; font-size: 2rem; border: 0; background: var(--brand); color: #fff; cursor: pointer; }
 .mic.rec { background: var(--bad); animation: pulse 1s infinite; }
 @keyframes pulse { 50% { transform: scale(1.08); } }
+
+/* menú de "añadir alimento" */
+.opt { display: flex; align-items: center; gap: 12px; padding: 12px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg); cursor: pointer; }
+.opt:active { background: var(--brand-l); }
+.opt .ic { font-size: 1.6rem; width: 38px; text-align: center; flex: none; }
+.opt .muted { font-size: .8rem; }

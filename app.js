@@ -330,9 +330,19 @@ function foodListHtml(selId) {
 const chipsHtml = () => `<div class="chips">${[['all', 'Todos'], ['fav', '⭐ Favoritos'], ['tupper', '🍱 Tuppers'], ['casero', '🍳 Caseros'], ['producto', '🏷️ Productos'], ['base', '🥦 Básicos']].map(([k, l]) => `<button class="chip ${S.filter === k ? 'on' : ''}" data-act="filter" data-k="${k}">${l}</button>`).join('')}</div>`;
 
 function viewAlimentos() {
-  return `<div class="card"><h2>🍱 Mis alimentos y tuppers</h2><p class="muted">Guarda aquí tus platos favoritos con su información nutricional y añádelos a cualquier día con un toque.</p>
-    <div class="row wrap"><button class="btn" data-act="new-food">＋ Nuevo alimento</button><button class="btn sec" data-act="new-recipe">🍳 Plato con ingredientes</button><button class="btn sec" data-act="catalog">🔎 Catálogo nococinomas</button><button class="btn sec" data-act="scan">📷 Escanear código</button><button class="btn sec" data-act="voice-new">🎤 Crear por voz</button><button class="btn sec" data-act="import">📋 Importar varios</button></div>
-    <div class="field mt"><input type="search" id="q" placeholder="Buscar…" value="${esc(S.q)}"></div>${chipsHtml()}<div id="foodlist">${foodListHtml()}</div></div>`;
+  return `<div class="row between" style="margin-bottom:8px"><h2 style="margin:0">🍱 Mis alimentos</h2><button class="btn" data-act="food-menu">＋ Añadir</button></div>
+    <div class="card"><div class="field"><input type="search" id="q" placeholder="Buscar en mis ${db.foods.length} alimentos…" value="${esc(S.q)}"></div>${chipsHtml()}<div id="foodlist">${foodListHtml()}</div></div>`;
+}
+// Todas las formas de añadir un alimento, en un solo sitio
+function foodMenu() {
+  const opt = (act, ic, t, d) => `<div class="opt" data-act="${act}"><span class="ic">${ic}</span><div class="grow"><b>${t}</b><div class="muted">${d}</div></div><span class="muted">›</span></div>`;
+  openModal(`<div class="hd"><h2>¿Cómo quieres añadirlo?</h2><button class="icon" data-act="close">✕</button></div>
+    ${opt('catalog', '🔎', 'Catálogo nococinomas', 'Elige entre los tuppers de su web, ya con sus macros')}
+    ${opt('scan', '📷', 'Escanear código de barras', 'Para productos del supermercado')}
+    ${opt('new-food', '✍️', 'Escribirlo a mano', 'Nombre y valores de la etiqueta; también sirve de calculadora')}
+    ${opt('voice-new', '🎤', 'Decirlo por voz', 'Dicta el nombre y las calorías y macros')}
+    ${opt('new-recipe', '🍳', 'Plato con ingredientes', 'Tu receta casera, ingrediente a ingrediente')}
+    ${opt('import', '📋', 'Importar varios', 'Pega una lista de tuppers de golpe')}`);
 }
 
 function planBudget(mon, t) {
@@ -690,6 +700,7 @@ const A = {
     if (!name) return toast('Dile qué has comido'); if (!k) return toast('Indica las kcal (aunque sea aproximado)');
     pushEntry({ id: null, name, unit: 'racion', kcal: r1(k), p, c, f }, 1, $('#m-meal').value, true); save(); closeModal(); render(); toast('Comida libre registrada 🎉');
   },
+  'food-menu': () => { M = null; foodMenu(); },
   tab: el => { S.tab = el.dataset.tab; render(); window.scrollTo(0, 0); },
   day: el => { S.date = addDays(S.date, +el.dataset.n); render(); },
   today: () => { S.date = todayS(); render(); },
