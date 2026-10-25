@@ -131,3 +131,16 @@ textarea { min-height: 110px; }
 .cal button.sel.has::after { background: #fff; }
 .cal i { visibility: hidden; }
 :root { --ex: #8b5cf6; }
+
+/* medidas, escáner y voz */
+#nav button { font-size: .68rem; }
+.tbl { display: grid; grid-template-columns: 1.5fr 1fr 1fr 1.2fr; gap: 6px 8px; font-size: .88rem; align-items: center; }
+.tbl .h { color: var(--muted); font-size: .72rem; }
+.num { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: var(--brand); color: #fff; font-size: .75rem; font-weight: 700; flex: none; }
+.num.on { background: var(--ex); }
+.mrow { display: flex; align-items: center; gap: 8px; padding: 7px 6px; border-radius: 12px; }
+.mrow.sel { background: var(--brand-l); }
+.mrow input { width: 96px; flex: none; }
+.mic { width: 84px; height: 84px; border-radius: 50%; font-size: 2rem; border: 0; background: var(--brand); color: #fff; cursor: pointer; }
+.mic.rec { background: var(--bad); animation: pulse 1s infinite; }
+@keyframes pulse { 50% { transform: scale(1.08); } }

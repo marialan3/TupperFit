@@ -1,0 +1,4 @@
+@zxing/library 0.21.3 — MIT License
+https://github.com/zxing-js/library
+Copyright (c) zxing-js contributors
+Se usa solo para leer códigos de barras con la cámara en navegadores sin BarcodeDetector.

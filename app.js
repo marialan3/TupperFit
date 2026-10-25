@@ -43,6 +43,10 @@ const BASE_FOODS = [
 const SPORTS = { caminar: ['🚶 Caminar', 3.5], correr: ['🏃 Correr', 9], bici: ['🚴 Bici', 7], natacion: ['🏊 Natación', 6], aquagym: ['💦 Aquagym', 5.5], fuerza: ['🏋️ Fuerza / gimnasio', 4], eliptica: ['🌀 Elíptica', 5], yoga: ['🧘 Yoga / pilates', 2.5], baile: ['💃 Baile / zumba', 5], hiit: ['🔥 HIIT', 8], otro: ['⚡ Otro', 4] };
 const WEEK_MIN_GOAL = 150; // recomendación general de actividad semanal (OMS)
 
+// Peso típico (g) de una unidad, para poder decir "dos huevos" o "un plátano".
+const BASE_SERV = { 'Huevo entero': 60, 'Clara de huevo': 33, 'Plátano': 120, 'Manzana': 180, 'Naranja': 150, 'Kiwi': 75, 'Tortita de arroz': 9, 'Aguacate': 150, 'Tomate': 120, 'Zanahoria': 80, 'Yogur griego 0%': 125, 'Skyr natural': 150 };
+const fixBase = foods => { foods.forEach(f => { if (f.type === 'base' && !f.serv && BASE_SERV[f.name]) f.serv = BASE_SERV[f.name]; }); return foods; };
+
 const DEF_PROFILE = { configured: false, sex: 'f', age: 35, height: 165, weight: 75, goalWeight: 0, activity: 1.375, goalKgWeek: 0.5, kcal: 1700, pP: 35, pC: 40, pF: 25, stepsGoal: 10000 };
 
 let db = load();
@@ -51,10 +55,10 @@ function load() {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const d = JSON.parse(raw);
-      return { profile: { ...DEF_PROFILE, ...(d.profile || {}) }, foods: d.foods || [], log: d.log || {}, plan: d.plan || {}, lastBackup: d.lastBackup || null, created: d.created || todayS(), freeDays: d.freeDays || {} };
+      return { profile: { ...DEF_PROFILE, ...(d.profile || {}) }, foods: fixBase(d.foods || []), log: d.log || {}, plan: d.plan || {}, lastBackup: d.lastBackup || null, created: d.created || todayS(), freeDays: d.freeDays || {}, body: d.body || {} };
     }
   } catch (e) { console.warn('No se pudo leer', e); }
-  return { profile: { ...DEF_PROFILE }, foods: BASE_FOODS.map(f => ({ ...f })), log: {}, plan: {}, lastBackup: null, created: todayS(), freeDays: {} };
+  return { profile: { ...DEF_PROFILE }, foods: fixBase(BASE_FOODS.map(f => ({ ...f }))), log: {}, plan: {}, lastBackup: null, created: todayS(), freeDays: {}, body: {} };
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(db)); }
@@ -251,14 +255,14 @@ function toast(msg) {
   clearTimeout(toast.t); toast.t = setTimeout(() => { t.hidden = true; }, 2600);
 }
 function openModal(html) { const m = $('#modal'); m.innerHTML = `<div class="sheet">${html}</div>`; m.hidden = false; }
-function closeModal() { $('#modal').hidden = true; $('#modal').innerHTML = ''; M = null; R = null; C = null; }
+function closeModal() { $('#modal').hidden = true; $('#modal').innerHTML = ''; M = null; R = null; C = null; if (typeof extrasClose === 'function') extrasClose(); }
 
 // ───────── vistas ─────────
+const VIEWS = { hoy: () => viewHoy(), alimentos: () => viewAlimentos(), plan: () => viewPlan(), semana: () => viewSemana(), ajustes: () => viewAjustes() }; // extras.js añade "medidas"
 function render() {
   $$('#nav button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.tab));
   $('#topinfo').textContent = `Objetivo ${r0(db.profile.kcal)} kcal`;
-  const v = { hoy: viewHoy, alimentos: viewAlimentos, plan: viewPlan, semana: viewSemana, ajustes: viewAjustes }[S.tab];
-  $('#view').innerHTML = v();
+  $('#view').innerHTML = VIEWS[S.tab]();
 }
 
 function viewHoy() {
@@ -281,7 +285,7 @@ function viewHoy() {
     ${day.entries.length ? `<div class="row between wrap" style="font-size:.85rem"><span class="muted">Gasto estimado ${r0(exp)} kcal${day.burned > 0 ? ' (con tu reloj)' : ''}</span><span class="${def >= 0 ? 'good' : 'badc'}"><b>${def >= 0 ? 'Déficit' : 'Superávit'} ${r0(Math.abs(def))} kcal</b></span></div>` : ''}</div>`;
 
   const fd = isFreeDay(date), fk = totals(day.entries.filter(e => isFreeEntry(date, e))).kcal;
-  h += `<div class="row wrap" style="margin:-4px 0 12px"><button class="btn sm ${fd ? '' : 'ghost'}" style="${fd ? 'background:var(--ex)' : ''}" data-act="free-day" data-date="${date}">🎉 ${fd ? 'Día libre ✔ (quitar)' : 'Marcar como día libre'}</button>${fk ? `<span class="muted">${r0(fk)} kcal libres</span>` : ''}</div>${fd ? '<p class="muted" style="margin-top:-6px">Hoy es día libre: se registra tal cual (cuenta en tu déficit real) pero no se considera un fallo ni entra en las medias del plan.</p>' : ''}`;
+  h += `<div class="row wrap" style="margin:-4px 0 12px"><button class="btn sm sec" data-act="voice">🎤 Dictar comidas</button><button class="btn sm ${fd ? '' : 'ghost'}" style="${fd ? 'background:var(--ex)' : ''}" data-act="free-day" data-date="${date}">🎉 ${fd ? 'Día libre ✔ (quitar)' : 'Marcar como día libre'}</button>${fk ? `<span class="muted">${r0(fk)} kcal libres</span>` : ''}</div>${fd ? '<p class="muted" style="margin-top:-6px">Hoy es día libre: se registra tal cual (cuenta en tu déficit real) pero no se considera un fallo ni entra en las medias del plan.</p>' : ''}`;
   if (plan.length) {
     h += `<div class="card plancard"><div class="row between"><h3>🗓️ Planificado para hoy</h3><button class="btn sm" data-act="plan-reg-all">Registrar todo</button></div>`;
     plan.forEach(e => { const m = eM(e); h += `<div class="entry"><div class="grow"><div class="n">${e.free ? '🎉 ' : ''}${esc(e.name)}</div><div class="s">${MEALS.find(x => x[0] === e.meal)[1]} · ${qtyLabel(e)}</div></div><span class="k">${r0(m.kcal)}</span><button class="icon" data-act="plan-reg" data-id="${e.id}" title="Registrar">✅</button></div>`; });
@@ -327,7 +331,7 @@ const chipsHtml = () => `<div class="chips">${[['all', 'Todos'], ['fav', '⭐ Fa
 
 function viewAlimentos() {
   return `<div class="card"><h2>🍱 Mis alimentos y tuppers</h2><p class="muted">Guarda aquí tus platos favoritos con su información nutricional y añádelos a cualquier día con un toque.</p>
-    <div class="row wrap"><button class="btn" data-act="new-food">＋ Nuevo alimento</button><button class="btn sec" data-act="new-recipe">🍳 Plato con ingredientes</button><button class="btn sec" data-act="catalog">🔎 Catálogo nococinomas</button><button class="btn sec" data-act="import">📋 Importar varios</button></div>
+    <div class="row wrap"><button class="btn" data-act="new-food">＋ Nuevo alimento</button><button class="btn sec" data-act="new-recipe">🍳 Plato con ingredientes</button><button class="btn sec" data-act="catalog">🔎 Catálogo nococinomas</button><button class="btn sec" data-act="scan">📷 Escanear código</button><button class="btn sec" data-act="voice-new">🎤 Crear por voz</button><button class="btn sec" data-act="import">📋 Importar varios</button></div>
     <div class="field mt"><input type="search" id="q" placeholder="Buscar…" value="${esc(S.q)}"></div>${chipsHtml()}<div id="foodlist">${foodListHtml()}</div></div>`;
 }
 
@@ -471,7 +475,8 @@ const mealSelect = id => `<select id="${id}">${MEALS.map(([k, n]) => `<option va
 function renderAdd() {
   const title = M.target === 'plan' ? `Planificar · ${fmtDate(M.date, { weekday: 'long', day: 'numeric' })}` : 'Añadir comida';
   let h = `<div class="hd"><h2>${title}</h2><button class="icon" data-act="close">✕</button></div>
-    <div class="seg"><button class="${M.tab === 'lib' ? 'on' : ''}" data-act="mtab" data-k="lib">Mis alimentos</button><button class="${M.tab === 'new' ? 'on' : ''}" data-act="mtab" data-k="new">Nuevo</button><button data-act="recipe-from-add">🍳 Receta</button><button class="${M.tab === 'free' ? 'on' : ''}" data-act="mtab" data-k="free">🎉 Libre</button></div><div id="m-day" class="preview"></div>`;
+    <div class="seg"><button class="${M.tab === 'lib' ? 'on' : ''}" data-act="mtab" data-k="lib">Mis alimentos</button><button class="${M.tab === 'new' ? 'on' : ''}" data-act="mtab" data-k="new">Nuevo</button><button data-act="recipe-from-add">🍳 Receta</button><button class="${M.tab === 'free' ? 'on' : ''}" data-act="mtab" data-k="free">🎉 Libre</button></div>
+    <div class="row wrap" style="margin-bottom:8px"><button class="btn sm sec" data-act="scan">📷 Escanear código</button><button class="btn sm sec" data-act="voice-add">🎤 Dictar</button></div><div id="m-day" class="preview"></div>`;
   if (M.tab === 'lib') {
     const f = db.foods.find(x => x.id === M.selId);
     h += `<div class="field"><input type="search" id="mq" placeholder="Buscar…" value="${esc(S.q)}"></div>${chipsHtml()}<div id="mlist" style="max-height:34vh;overflow-y:auto">${foodListHtml(M.selId)}</div>`;
@@ -479,7 +484,7 @@ function renderAdd() {
       h += `<div class="card" style="margin-top:10px"><b>${esc(f.name)}</b><div class="field mt"><label>${f.unit === '100g' ? 'Los valores son por 100 g: indica el peso real que has comido' : '¿Cuánto has comido?'}</label><div class="row"><input type="number" inputmode="decimal" id="m-qty" data-live="lib" value="${M.qty}" step="any"><select id="m-mode" data-live="lib" style="width:auto">${modeOpts(f).map(([k, l]) => `<option value="${k}" ${M.mode === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div><div class="field"><label>Comida</label>${mealSelect('m-meal')}</div>${f.ingredients ? `<div class="muted" style="font-size:.8rem">🍳 Plato completo (${r1(f.servings)} ${f.servings === 1 ? 'ración' : 'raciones'}): ${f.ingredients.map(i => `${esc(i.name)} ${r1(i.qty)}${i.unit === '100g' ? ' g' : ' rac.'}`).join(' · ')}</div>` : ''}<label class="row" style="color:var(--text)"><input type="checkbox" id="m-free" style="width:auto"> 🎉 Comida libre (fuera de plan)</label><div id="m-prev" class="preview"></div><button class="btn block" data-act="add-confirm">Añadir</button></div>`;
     }
   } else if (M.tab === 'free') h += freeForm();
-  else h += foodForm({ name: '', type: 'producto', unit: '100g', kcal: '', p: '', c: '', f: '' }, true);
+  else h += foodForm(M.pre || { name: '', type: 'producto', unit: '100g', kcal: '', p: '', c: '', f: '' }, true);
   openModal(h);
   if (M.tab === 'lib') updatePreview(); else if (M.tab === 'new') updateFormPreview(); else updDay(null);
 }
@@ -501,6 +506,7 @@ function foodForm(f, withQty) {
   <div id="f-check" class="muted"></div>
   <div class="field"><label>Peso de 1 unidad o ración (g) — opcional</label><input type="number" inputmode="decimal" id="f-serv" value="${f.serv || ''}" step="any" placeholder="p. ej. 120 (un plátano) o 350 (un tupper)"></div>
   <p class="muted" style="margin-top:-4px">Con este dato podrás añadirlo luego por unidades o por gramos reales.</p>
+  <div class="field"><label>Código de barras — opcional</label><input type="text" inputmode="numeric" id="f-barcode" value="${esc(f.barcode || '')}" placeholder="para reconocerlo al escanear"></div>
   ${withQty ? `<div class="grid2 mt"><div class="field"><label id="f-qtylbl">Cantidad</label><input type="number" inputmode="decimal" id="f-qty" data-live="form" value="${f.unit === 'racion' ? 1 : 100}" step="any"></div><div class="field"><label>Comida</label>${mealSelect('m-meal')}</div></div><div id="m-prev" class="preview"></div>
   <label class="row" style="color:var(--text)"><input type="checkbox" id="f-save" style="width:auto" checked> Guardar en mis alimentos</label>
   <label class="row" style="color:var(--text)"><input type="checkbox" id="f-free" style="width:auto"> 🎉 Comida libre (fuera de plan)</label>
@@ -509,7 +515,7 @@ function foodForm(f, withQty) {
 function readForm() {
   const p = num($('#f-p').value), c = num($('#f-c').value), f = num($('#f-f').value);
   let kcal = num($('#f-kcal').value); if (!kcal) kcal = calcKcal(p, c, f);
-  return { name: $('#f-name').value.trim(), type: $('#f-type').value, unit: $('#f-unit').value, kcal: r1(kcal), p, c, f, serv: num($('#f-serv').value) || 0 };
+  return { name: $('#f-name').value.trim(), type: $('#f-type').value, unit: $('#f-unit').value, kcal: r1(kcal), p, c, f, serv: num($('#f-serv').value) || 0, barcode: ($('#f-barcode').value.replace(/\D/g, '') || undefined) };
 }
 function updateFormPreview() {
   const f = readForm(), k = calcKcal(f.p, f.c, f.f), chk = $('#f-check');
