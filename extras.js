@@ -392,3 +392,54 @@ document.addEventListener('change', ev => {
   } else if (k === 'save') e.save = t.checked;
   else e[k] = k === 'name' ? t.value : t.value;
 });
+
+
+// ───────── 4) IMPORTAR PASOS Y CALORÍAS DE SALUD (iPhone, con un Atajo) ─────────
+// El Atajo copia un texto como "TupperFit pasos 8234 activas 340" y aquí se importa.
+// (Una web instalada en iPhone no comparte datos con Safari, así que no se puede abrir con un enlace.)
+function healthInt(v) { return /^\d{1,3}([.,]\d{3})+$/.test(v) ? parseInt(v.replace(/[.,]/g, ''), 10) : Math.round(parseFloat(v.replace(',', '.'))); }
+function parseHealth(text) {
+  const t = String(text || ''), g = re => { const m = t.match(re); return m ? m[1] : null; };
+  const steps = g(/(?:pasos|steps)\D{0,4}([\d.,]+)/i), active = g(/(?:activas?|active)\D{0,4}([\d.,]+)/i), weight = g(/(?:peso|weight)\D{0,4}([\d.,]+)/i);
+  const out = { date: g(/(\d{4}-\d{2}-\d{2})/) };
+  const st = steps && healthInt(steps), ac = active && healthInt(active), wt = weight && parseFloat(weight.replace(',', '.'));
+  if (st >= 0 && st <= 100000 && steps) out.steps = st;
+  if (ac >= 0 && ac <= 5000 && active) out.active = ac;
+  if (wt >= 30 && wt <= 400) out.weight = r1(wt);
+  return out.steps != null || out.active != null || out.weight != null ? out : null;
+}
+function applyHealth(r) {
+  const date = r.date && r.date <= todayS() ? r.date : todayS(), d = getDay(date, true), parts = [];
+  if (r.steps != null) { d.steps = r.steps; parts.push(`${r0(r.steps)} pasos`); }
+  if (r.active != null) { d.burned = r.active; parts.push(`${r0(r.active)} kcal activas`); }
+  if (r.weight != null) { d.weight = r.weight; parts.push(`${r.weight} kg`); }
+  save(); closeModal(); S.tab = 'hoy'; S.date = date; render(); toast(`Importado de Salud: ${parts.join(' · ')} ✔`);
+}
+function openHealthModal(text, failed) {
+  M = null;
+  openModal(`<div class="hd"><h2>📥 Importar de Salud</h2><button class="icon" data-act="close">✕</button></div>
+    <p class="muted">${failed ? 'No he encontrado datos en el portapapeles. ' : ''}Ejecuta tu Atajo (copia los pasos y las calorías activas) y pega aquí el resultado: mantén pulsado el cuadro → <b>Pegar</b>.</p>
+    <div class="field"><textarea id="h-text" style="min-height:70px" placeholder="TupperFit pasos 8234 activas 340">${esc(text || '')}</textarea></div>
+    <button class="btn block" data-act="health-go">Importar</button>
+    <details class="mt"><summary class="muted">¿Cómo creo el Atajo? (una sola vez)</summary>
+      <ol class="muted" style="padding-left:18px;line-height:1.5">
+        <li>En <b>Atajos</b> → <b>＋</b> nuevo atajo, llámalo "Salud a TupperFit".</li>
+        <li>Acción <b>Buscar muestras de Salud</b>: Tipo = <b>Pasos</b>, Fecha de inicio = <b>es hoy</b>.</li>
+        <li>Acción <b>Calcular estadísticas</b>: <b>Suma</b>. Después <b>Redondear número</b>.</li>
+        <li>Repite los pasos 2-3 con el tipo <b>Energía activa</b>.</li>
+        <li>Acción <b>Texto</b>: <code>TupperFit pasos [pasos] activas [energía]</code> (inserta las variables).</li>
+        <li>Acción <b>Copiar en el portapapeles</b>.</li>
+        <li>Añádelo a la pantalla de inicio. Ejecútalo con el móvil <b>desbloqueado</b> (Salud no se deja leer bloqueado), y luego abre TupperFit → Importar.</li>
+      </ol><p class="muted">Guía completa con consejos en <b>ATAJO-SALUD.md</b> del repositorio.</p></details>`);
+}
+Object.assign(A, {
+  'health-import': async () => {
+    let text = ''; try { text = await navigator.clipboard.readText(); } catch (e) { /* sin permiso: se pega a mano */ }
+    const r = parseHealth(text); if (r) return applyHealth(r);
+    openHealthModal('', true);
+  },
+  'health-go': () => {
+    const r = parseHealth($('#h-text').value); if (!r) return toast('No encuentro "pasos" ni "activas" en ese texto');
+    applyHealth(r);
+  },
+});

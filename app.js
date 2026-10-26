@@ -313,7 +313,7 @@ function viewHoy() {
     <div class="field"><label>Calorías activas (Amazfit)</label><input type="number" inputmode="numeric" data-day="burned" value="${day.burned ?? ''}" placeholder="p. ej. 350"></div>
     <div class="field"><label>Agua (litros)</label><input type="number" inputmode="decimal" step="0.25" data-day="water" value="${day.water ?? ''}" placeholder="2"></div></div>
     <div class="field"><label>Nota del día</label><input type="text" data-day="note" value="${esc(day.note)}" placeholder="Cómo te has sentido, hambre, sueño…"></div>
-    <p class="muted">Copia estos datos desde Zepp (pasos y calorías activas). Con las calorías activas el déficit es más preciso.</p></div>`;
+    <p class="muted">Anota pasos y calorías activas (Zepp). Con las calorías activas el déficit es más preciso.</p><button class="btn sm sec" data-act="health-import">📥 Importar de Salud (Atajo)</button></div>`;
   return h;
 }
 
