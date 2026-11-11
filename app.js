@@ -287,8 +287,9 @@ function viewHoy() {
   const fd = isFreeDay(date), fk = totals(day.entries.filter(e => isFreeEntry(date, e))).kcal;
   h += `<div class="row wrap" style="margin:-4px 0 12px"><button class="btn sm sec" data-act="voice">🎤 Dictar comidas</button><button class="btn sm ${fd ? '' : 'ghost'}" style="${fd ? 'background:var(--ex)' : ''}" data-act="free-day" data-date="${date}">🎉 ${fd ? 'Día libre ✔ (quitar)' : 'Marcar como día libre'}</button>${fk ? `<span class="muted">${r0(fk)} kcal libres</span>` : ''}</div>${fd ? '<p class="muted" style="margin-top:-6px">Hoy es día libre: se registra tal cual (cuenta en tu déficit real) pero no se considera un fallo ni entra en las medias del plan.</p>' : ''}`;
   if (plan.length) {
-    h += `<div class="card plancard"><div class="row between"><h3>🗓️ Planificado para hoy</h3><button class="btn sm" data-act="plan-reg-all">Registrar todo</button></div>`;
-    plan.forEach(e => { const m = eM(e); h += `<div class="entry"><div class="grow"><div class="n">${e.free ? '🎉 ' : ''}${esc(e.name)}</div><div class="s">${MEALS.find(x => x[0] === e.meal)[1]} · ${qtyLabel(e)}</div></div><span class="k">${r0(m.kcal)}</span><button class="icon" data-act="plan-reg" data-id="${e.id}" title="Registrar">✅</button></div>`; });
+    h += `<div class="card plancard"><div class="row between"><h3>🗓️ Planificado para hoy</h3><button class="btn sm" data-act="plan-reg-all">Registrar todo</button></div><p class="muted" style="margin:0 0 4px">✅ lo he comido · 🗑️ no lo he comido (se quita del plan)</p>`;
+    plan.forEach(e => { const m = eM(e); h += `<div class="entry"><div class="grow"><div class="n">${e.free ? '🎉 ' : ''}${esc(e.name)}</div><div class="s">${MEALS.find(x => x[0] === e.meal)[1]} · ${qtyLabel(e)}</div></div><span class="k">${r0(m.kcal)}</span><button class="icon" data-act="plan-reg" data-id="${e.id}" title="Registrar: lo he comido">✅</button><button class="icon" data-act="plan-skip" data-id="${e.id}" title="No lo he comido: quitar del plan">🗑️</button></div>`; });
+    if (plan.length > 1) h += `<button class="btn sm ghost mt" data-act="plan-skip-all">No he comido nada de esto: quitar todo</button>`;
     h += '</div>';
   }
 
@@ -738,6 +739,8 @@ const A = {
     e.qty = q; e.meal = $('#m-meal').value; if ($('#e-free').checked) e.free = true; else delete e.free; save(); closeModal(); render();
   },
   'plan-reg': el => { regPlan(getPlan(S.date).find(e => e.id === el.dataset.id)); save(); render(); },
+  'plan-skip': el => { const e = getPlan(S.date).find(x => x.id === el.dataset.id); db.plan[S.date] = getPlan(S.date).filter(x => x.id !== el.dataset.id); save(); render(); toast(`Quitado del plan: ${e ? e.name : ''}`); },
+  'plan-skip-all': () => { if (!confirm('¿Quitar del plan todo lo que queda pendiente de este día?')) return; db.plan[S.date] = getPlan(S.date).filter(e => e.done); save(); render(); toast('Pendiente quitado del plan'); },
   'plan-reg-all': () => { getPlan(S.date).filter(e => !e.done).forEach(regPlan); save(); render(); toast('Plan registrado ✔'); },
   'plan-dup': el => { const d = el.dataset.date; db.plan[addDays(d, 1)] = [...getPlan(addDays(d, 1)), ...getPlan(d).map(e => ({ ...e, id: uid(), done: false }))]; save(); render(); toast('Duplicado al día siguiente'); },
   'plan-copy-prev': () => {
